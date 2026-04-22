@@ -102,21 +102,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     store = context.application.bot_data["store"]
     state = await asyncio.to_thread(store.get_state)
-
-    current_line = state.get("current_line_number")
-    next_line = state.get("next_line_number")
-    last_error = state.get("last_error") or "-"
-    database_name = DATABASE_LABELS.get(str(state.get("backend", "unknown")), str(state.get("backend", "unknown")))
-
-    lines = [
-        f"Database: {database_name}",
-        f"Status: {state.get('status', 'unknown')}",
-        f"Uploaded: {state.get('uploaded_count', 0)}/{state.get('total_count', 0)}",
-        f"Current line: {current_line if current_line is not None else '-'}",
-        f"Next line: {next_line if next_line is not None else '-'}",
-        f"Last error: {last_error}",
-    ]
-    await update.effective_message.reply_text("\n".join(lines))
+    await update.effective_message.reply_text(
+        _format_progress_message(source_label="status", queue_state=state),
+        disable_web_page_preview=True,
+    )
 
 
 async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -190,7 +179,8 @@ async def _queue_text_payload(
     if first_line_number is not None and last_line_number is not None:
         start_progress_task(
             application,
-            progress_message=submission_message,
+            chat_id=submission_message.chat_id,
+            message_id=submission_message.message_id,
             source_label=source_label,
             first_line_number=first_line_number,
             last_line_number=last_line_number,
@@ -289,26 +279,38 @@ def start_upload_task(application: Application) -> None:
 def start_progress_task(
     application: Application,
     *,
-    progress_message: Message,
+    chat_id: int,
+    message_id: int,
     source_label: str,
     first_line_number: int,
     last_line_number: int,
 ) -> None:
     progress_tasks = application.bot_data.setdefault("progress_tasks", {})
+    if message_id in progress_tasks and not progress_tasks[message_id].done():
+        return
+
+    store = application.bot_data["store"]
+    store.save_progress_watch(
+        chat_id=chat_id,
+        message_id=message_id,
+        source_label=source_label,
+        first_line_number=first_line_number,
+        last_line_number=last_line_number,
+    )
     task = asyncio.create_task(
         monitor_batch_progress(
             application,
-            chat_id=progress_message.chat_id,
-            message_id=progress_message.message_id,
+            chat_id=chat_id,
+            message_id=message_id,
             source_label=source_label,
             first_line_number=first_line_number,
             last_line_number=last_line_number,
         ),
-        name=f"progress-{progress_message.message_id}",
+        name=f"progress-{message_id}",
     )
     task.add_done_callback(log_background_task)
-    task.add_done_callback(lambda finished: progress_tasks.pop(progress_message.message_id, None))
-    progress_tasks[progress_message.message_id] = task
+    task.add_done_callback(lambda finished: progress_tasks.pop(message_id, None))
+    progress_tasks[message_id] = task
 
 
 async def monitor_batch_progress(
@@ -336,15 +338,19 @@ async def monitor_batch_progress(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=text,
+                disable_web_page_preview=True,
             )
         except BadRequest as exc:
             if "message is not modified" not in str(exc).lower():
+                await asyncio.to_thread(store.delete_progress_watch, message_id)
                 raise
         except TelegramError as exc:
+            await asyncio.to_thread(store.delete_progress_watch, message_id)
             logger.warning("Could not update progress message %s: %s", message_id, exc)
             return
 
         if batch_progress.get("total_count", 0) == 0 or batch_progress.get("uploaded_count") == batch_progress.get("total_count"):
+            await asyncio.to_thread(store.delete_progress_watch, message_id)
             return
 
         await asyncio.sleep(PROGRESS_UPDATE_SECONDS)
@@ -354,6 +360,7 @@ def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) 
     total_count = int(queue_state.get("total_count", 0) or 0)
     uploaded_count = int(queue_state.get("uploaded_count", 0) or 0)
     status = str(queue_state.get("status", "ready"))
+    database_name = DATABASE_LABELS.get(str(queue_state.get("backend", "unknown")), str(queue_state.get("backend", "unknown")))
     current_line = queue_state.get("current_line_number")
     current_url = queue_state.get("current_url")
     next_line = queue_state.get("next_line_number")
@@ -364,6 +371,7 @@ def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) 
 
     lines = [
         f"Source: {source_label}",
+        f"Database: {database_name}",
         f"Status: {status}",
         f"Progress: {_render_progress_bar(uploaded_count, total_count)} {uploaded_count}/{total_count} ({percent}%)",
         f"Current: {_line_preview(current_line, current_url)}",
@@ -429,7 +437,21 @@ def log_background_task(task: asyncio.Task[Any]) -> None:
 async def on_startup(application: Application) -> None:
     application.bot_data.setdefault("progress_tasks", {})
     application.bot_data.setdefault("submission_tasks", {})
+    restore_progress_tasks(application)
     start_upload_task(application)
+
+
+def restore_progress_tasks(application: Application) -> None:
+    store = application.bot_data["store"]
+    for progress_watch in store.list_progress_watches():
+        start_progress_task(
+            application,
+            chat_id=int(progress_watch["chat_id"]),
+            message_id=int(progress_watch["message_id"]),
+            source_label=str(progress_watch["source_label"]),
+            first_line_number=int(progress_watch["first_line_number"]),
+            last_line_number=int(progress_watch["last_line_number"]),
+        )
 
 
 async def on_shutdown(application: Application) -> None:
