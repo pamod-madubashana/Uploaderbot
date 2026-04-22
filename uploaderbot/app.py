@@ -6,6 +6,7 @@ from telegram.ext import Application, ApplicationBuilder, CommandHandler, Messag
 from .config import Config, load_env_file
 from .constants import BASE_DIR, ENV_FILE
 from .handlers import (
+    cancel_command,
     help_command,
     on_shutdown,
     on_startup,
@@ -38,7 +39,8 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler(["skip", "remove_current", "cancel"], skip_command))
+    application.add_handler(CommandHandler(["skip", "remove_current"], skip_command))
+    application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(MessageHandler(filters.Document.TEXT, text_file_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     return application

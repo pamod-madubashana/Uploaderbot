@@ -83,7 +83,8 @@ https://example.com/{folder}/{file}.mp4 folder=1-100 file=2
 - `/help` shows all available commands.
 - `/status` shows the global queue status.
 - `/skip` removes the item that is currently downloading or uploading.
-- `/remove_current` and `/cancel` are aliases for `/skip`.
+- `/remove_current` is an alias for `/skip`.
+- `/cancel` removes all current and queued non-uploaded items.
 
 ## Progress Updates
 

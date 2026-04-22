@@ -17,6 +17,7 @@ from .store import UploadStore
 logger = logging.getLogger("uploaderbot")
 IDLE_POLL_SECONDS = 2
 SKIP_REASON = "Removed by /skip"
+CANCEL_REASON = "Cleared by /cancel"
 
 
 def format_bytes(size_bytes: int) -> str:
@@ -38,7 +39,7 @@ class UploadWorker:
         self._wake_event = asyncio.Event()
         self._current_item: dict[str, object] | None = None
         self._current_item_task: asyncio.Task[tuple[object, str]] | None = None
-        self._skip_requested_item_ids: set[str] = set()
+        self._cancel_requested_item_ids: dict[str, str] = {}
 
     async def run(self) -> None:
         async with self._run_lock:
@@ -78,11 +79,15 @@ class UploadWorker:
                     try:
                         message, media_type = await item_task
                     except asyncio.CancelledError:
-                        if item_id in self._skip_requested_item_ids:
-                            self._skip_requested_item_ids.discard(item_id)
-                            await asyncio.to_thread(self.store.mark_removed, item_id, SKIP_REASON)
-                            await asyncio.to_thread(self.store.refresh_state, last_error=SKIP_REASON)
-                            logger.info("Removed current item after /skip: line %s", current_item["line_number"])
+                        cancel_reason = self._cancel_requested_item_ids.pop(item_id, None)
+                        if cancel_reason is not None:
+                            await asyncio.to_thread(self.store.mark_removed, item_id, cancel_reason)
+                            await asyncio.to_thread(self.store.refresh_state, last_error=cancel_reason)
+                            logger.info(
+                                "Removed current item after cancellation on line %s: %s",
+                                current_item["line_number"],
+                                cancel_reason,
+                            )
                             continue
                         raise
                     except DownloadTooLargeError as exc:
@@ -110,7 +115,7 @@ class UploadWorker:
                             self._current_item_task = None
                         if self._current_item == current_item:
                             self._current_item = None
-                        self._skip_requested_item_ids.discard(item_id)
+                        self._cancel_requested_item_ids.pop(item_id, None)
 
                     await asyncio.to_thread(
                         self.store.mark_uploaded,
@@ -239,13 +244,26 @@ class UploadWorker:
         logger.info("Deleted local file: %s", path)
 
     async def skip_current_item(self) -> dict[str, object] | None:
+        return await self._cancel_current_item(SKIP_REASON)
+
+    async def cancel_all_items(self) -> dict[str, object]:
+        removed_count = await asyncio.to_thread(self.store.remove_active_items, CANCEL_REASON)
+        cancelled_item = await self._cancel_current_item(CANCEL_REASON)
+        await asyncio.to_thread(self.store.refresh_state, last_error=CANCEL_REASON)
+        self.notify_queue_changed()
+        return {
+            "removed_count": removed_count,
+            "cancelled_item": cancelled_item,
+        }
+
+    async def _cancel_current_item(self, reason: str) -> dict[str, object] | None:
         current_item = self._current_item
         current_task = self._current_item_task
 
         if current_item is None or current_task is None or current_task.done():
             return None
 
-        self._skip_requested_item_ids.add(str(current_item["_id"]))
+        self._cancel_requested_item_ids[str(current_item["_id"])] = reason
         current_task.cancel()
         return current_item
 

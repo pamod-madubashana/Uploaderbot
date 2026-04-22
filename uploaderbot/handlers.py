@@ -31,7 +31,8 @@ def build_help_text() -> str:
         "❓ /help - show all available commands\n"
         "📊 /status - show current queue progress\n"
         "⏭️ /skip - remove the current item\n"
-        "♻️ /remove_current, /cancel - aliases for /skip"
+        "♻️ /remove_current - alias for /skip\n"
+        "🧹 /cancel - remove all current and queued items"
     )
 
 
@@ -47,6 +48,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "🔁 Or use `site.com/{n}/{n}.mp4 1-100`\n\n"
         "📊 `/status` shows queue progress\n"
         "⏭️ `/skip` removes the current item\n"
+        "🧹 `/cancel` removes all queued items\n"
         "❓ `/help` shows all commands",
         disable_web_page_preview=True,
     )
@@ -129,6 +131,21 @@ async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text(
         f"Removing current item: line {skipped_item['line_number']} - {short_name_from_url(str(skipped_item['url']))}"
     )
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    uploader = context.application.bot_data["uploader"]
+    result = await uploader.cancel_all_items()
+    removed_count = int(result.get("removed_count", 0) or 0)
+    if removed_count == 0:
+        await message.reply_text("No active queue items to cancel.")
+        return
+
+    await message.reply_text(f"Cancelled {removed_count} queued item(s).")
 
 
 async def _queue_text_payload(

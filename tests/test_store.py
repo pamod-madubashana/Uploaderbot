@@ -142,6 +142,33 @@ class StoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_remove_active_items_clears_pending_and_uploading_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
+            store = SQLiteUploadStore(config)
+            try:
+                store.enqueue_urls(
+                    [
+                        "https://example.com/1.mp4",
+                        "https://example.com/2.mp4",
+                        "https://example.com/3.mp4",
+                    ]
+                )
+                first_item = store.get_next_item()
+                self.assertIsNotNone(first_item)
+                assert first_item is not None
+                uploading_item = store.mark_uploading(first_item["_id"])
+                self.assertIsNotNone(uploading_item)
+
+                removed_count = store.remove_active_items("Cleared by /cancel")
+
+                self.assertEqual(removed_count, 3)
+                state = store.refresh_state()
+                self.assertEqual(state["total_count"], 0)
+                self.assertEqual(state["status"], "idle")
+            finally:
+                store.close()
+
     def test_create_store_uses_sqlite_uri(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
