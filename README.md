@@ -43,6 +43,12 @@ Notes:
 python __main__.py
 ```
 
+Or use the helper script on Linux/macOS to create `.venv`, install missing requirements, and start the bot:
+
+```bash
+bash run.sh
+```
+
 ## Telegram Inputs
 
 The bot accepts these message formats:
