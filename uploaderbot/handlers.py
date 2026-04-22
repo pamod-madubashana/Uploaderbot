@@ -176,18 +176,9 @@ async def _queue_text_payload(
     last_line_number = enqueue_result["last_line_number"]
 
     progress_message = await message.reply_text(
-        _format_batch_progress(
+        _format_progress_message(
             source_label=source_label,
-            progress={
-                "status": state.get("status", "ready"),
-                "uploaded_count": 0,
-                "total_count": len(urls),
-                "current_line_number": None,
-                "current_url": None,
-                "next_line_number": first_line_number,
-                "next_url": urls[0],
-                "last_error": None,
-            },
+            queue_state=state,
         )
     )
 
@@ -253,12 +244,13 @@ async def monitor_batch_progress(
     store = application.bot_data["store"]
 
     while True:
-        progress = await asyncio.to_thread(
+        batch_progress = await asyncio.to_thread(
             store.get_batch_progress,
             first_line_number,
             last_line_number,
         )
-        text = _format_batch_progress(source_label=source_label, progress=progress)
+        queue_state = await asyncio.to_thread(store.get_state)
+        text = _format_progress_message(source_label=source_label, queue_state=queue_state)
 
         try:
             await application.bot.edit_message_text(
@@ -273,21 +265,21 @@ async def monitor_batch_progress(
             logger.warning("Could not update progress message %s: %s", message_id, exc)
             return
 
-        if progress.get("total_count", 0) == 0 or progress.get("uploaded_count") == progress.get("total_count"):
+        if batch_progress.get("total_count", 0) == 0 or batch_progress.get("uploaded_count") == batch_progress.get("total_count"):
             return
 
         await asyncio.sleep(PROGRESS_UPDATE_SECONDS)
 
 
-def _format_batch_progress(*, source_label: str, progress: dict[str, Any]) -> str:
-    total_count = int(progress.get("total_count", 0) or 0)
-    uploaded_count = int(progress.get("uploaded_count", 0) or 0)
-    status = str(progress.get("status", "ready"))
-    current_line = progress.get("current_line_number")
-    current_url = progress.get("current_url")
-    next_line = progress.get("next_line_number")
-    next_url = progress.get("next_url")
-    last_error = _short_error(progress.get("last_error"))
+def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) -> str:
+    total_count = int(queue_state.get("total_count", 0) or 0)
+    uploaded_count = int(queue_state.get("uploaded_count", 0) or 0)
+    status = str(queue_state.get("status", "ready"))
+    current_line = queue_state.get("current_line_number")
+    current_url = queue_state.get("current_url")
+    next_line = queue_state.get("next_line_number")
+    next_url = queue_state.get("next_url")
+    last_error = _short_error(queue_state.get("last_error"))
     percent = 100 if total_count == 0 else int((uploaded_count / total_count) * 100)
     updated_at = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
