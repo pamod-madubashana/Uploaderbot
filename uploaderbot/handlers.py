@@ -17,8 +17,6 @@ logger = logging.getLogger("uploaderbot")
 PROGRESS_BAR_WIDTH = 12
 PROGRESS_UPDATE_SECONDS = 10
 MAX_ERROR_LENGTH = 160
-PROGRESS_PENDING = "░"
-PROGRESS_FILL = "▓"
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -236,12 +234,29 @@ def _format_batch_progress(*, source_label: str, progress: dict[str, Any]) -> st
 
 
 def _render_progress_bar(uploaded_count: int, total_count: int) -> str:
-    if total_count <= 0:
-        return f"[{PROGRESS_PENDING * PROGRESS_BAR_WIDTH}]"
+    percent = 0 if total_count <= 0 else (uploaded_count / total_count) * 100
+    return f"[{progress_bar(percent)}]"
 
-    filled = round((uploaded_count / total_count) * PROGRESS_BAR_WIDTH)
-    filled = max(0, min(PROGRESS_BAR_WIDTH, filled))
-    return f"[{PROGRESS_FILL * filled}{PROGRESS_PENDING * (PROGRESS_BAR_WIDTH - filled)}]"
+
+def progress_bar(pct: object) -> str:
+    try:
+        pct_value = float(str(pct).strip("%"))
+    except ValueError:
+        pct_value = 0
+
+    bounded_pct = min(max(pct_value, 0), 100)
+    complete_cells = int(bounded_pct // 8)
+    partial_cell = int(bounded_pct % 8 - 1)
+    bar = "■" * complete_cells
+
+    if complete_cells < PROGRESS_BAR_WIDTH and partial_cell >= 0:
+        bar += ["▤", "▥", "▦", "▧", "▨", "▩", "■"][partial_cell]
+
+    if len(bar) > PROGRESS_BAR_WIDTH:
+        bar = bar[:PROGRESS_BAR_WIDTH]
+
+    bar += "□" * (PROGRESS_BAR_WIDTH - len(bar))
+    return bar
 
 
 def _line_preview(line_number: object, url: object) -> str:
