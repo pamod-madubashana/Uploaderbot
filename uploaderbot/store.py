@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from pymongo import ASCENDING, MongoClient, ReturnDocument, UpdateOne
 from pymongo.errors import PyMongoError
@@ -14,6 +15,7 @@ from .media import utc_now
 
 
 logger = logging.getLogger("uploaderbot")
+LINE_SHIFT_OFFSET = 1_000_000_000
 
 
 class UploadStore(Protocol):
@@ -73,16 +75,17 @@ class MongoUploadStore:
 
         logger.info("Queueing %s items into MongoDB state store.", len(urls))
         now = utc_now()
-        starting_line_number = self._get_highest_line_number() + 1
+        starting_line_number = self._get_insert_position()
+        self._shift_items_for_insert(starting_line_number, len(urls), now)
         operations: list[UpdateOne] = []
 
         for offset, url in enumerate(urls):
             line_number = starting_line_number + offset
             operations.append(
                 UpdateOne(
-                    {"_id": str(line_number)},
+                    {"_id": self._build_item_id(line_number)},
                     {
-                        "$setOnInsert": {
+                        "$set": {
                             "line_number": line_number,
                             "url": url,
                             "status": "pending",
@@ -131,13 +134,14 @@ class MongoUploadStore:
             {**line_filter, "last_error": {"$ne": None}},
             sort=[("updated_at", -1), ("line_number", -1)],
         )
+        any_uploading_item = self.items.find_one({"status": "uploading"}, projection={"_id": 1})
         status = "completed"
         if total_count == 0:
             status = "idle"
         elif current_item is not None:
             status = "uploading"
         elif next_item is not None:
-            status = "ready"
+            status = "queued" if any_uploading_item is not None else "ready"
 
         return {
             "first_line_number": first_line_number,
@@ -180,6 +184,57 @@ class MongoUploadStore:
         if item is None:
             return 0
         return int(item.get("line_number", 0))
+
+    def _get_insert_position(self) -> int:
+        current_item = self.items.find_one(
+            {"status": "uploading"},
+            sort=[("line_number", ASCENDING)],
+            projection={"line_number": 1},
+        )
+        if current_item is not None:
+            return int(current_item["line_number"]) + 1
+
+        next_item = self.items.find_one(
+            {"status": "pending"},
+            sort=[("line_number", ASCENDING)],
+            projection={"line_number": 1},
+        )
+        if next_item is not None:
+            return int(next_item["line_number"])
+
+        return self._get_highest_line_number() + 1
+
+    def _build_item_id(self, line_number: int) -> str:
+        return f"{line_number}-{uuid4().hex}"
+
+    def _shift_items_for_insert(self, insert_position: int, count: int, now) -> None:
+        affected_items = list(
+            self.items.find(
+                {"status": {"$ne": "removed"}, "line_number": {"$gte": insert_position}},
+                projection={"line_number": 1},
+                sort=[("line_number", -1)],
+            )
+        )
+        if not affected_items:
+            return
+
+        temp_operations = [
+            UpdateOne(
+                {"_id": item["_id"]},
+                {"$set": {"line_number": int(item["line_number"]) + LINE_SHIFT_OFFSET, "updated_at": now}},
+            )
+            for item in affected_items
+        ]
+        self.items.bulk_write(temp_operations, ordered=True)
+
+        final_operations = [
+            UpdateOne(
+                {"_id": item["_id"]},
+                {"$set": {"line_number": int(item["line_number"]) + count, "updated_at": now}},
+            )
+            for item in affected_items
+        ]
+        self.items.bulk_write(final_operations, ordered=True)
 
     def get_next_item(self) -> dict[str, Any] | None:
         return self.items.find_one({"status": "pending"}, sort=[("line_number", ASCENDING)])
@@ -362,11 +417,12 @@ class SQLiteUploadStore:
 
         logger.info("Queueing %s items into SQLite state store.", len(urls))
         now = utc_now().isoformat()
-        starting_line_number = self._get_highest_line_number() + 1
+        starting_line_number = self._get_insert_position()
+        self._shift_items_for_insert(starting_line_number, len(urls), now)
 
         for offset, url in enumerate(urls):
             line_number = starting_line_number + offset
-            item_id = str(line_number)
+            item_id = self._build_item_id(line_number)
             self.connection.execute(
                 """
                 INSERT INTO upload_items (
@@ -407,13 +463,16 @@ class SQLiteUploadStore:
             "SELECT * FROM upload_items WHERE last_error IS NOT NULL AND line_number BETWEEN ? AND ? ORDER BY updated_at DESC, line_number DESC LIMIT 1",
             params,
         )
+        any_uploading_item = self._fetchone(
+            "SELECT id FROM upload_items WHERE status = 'uploading' ORDER BY line_number ASC LIMIT 1"
+        )
         status = "completed"
         if total_count == 0:
             status = "idle"
         elif current_item is not None:
             status = "uploading"
         elif next_item is not None:
-            status = "ready"
+            status = "queued" if any_uploading_item is not None else "ready"
 
         return {
             "first_line_number": first_line_number,
@@ -452,6 +511,42 @@ class SQLiteUploadStore:
     def _get_highest_line_number(self) -> int:
         row = self.connection.execute("SELECT COALESCE(MAX(line_number), 0) FROM upload_items").fetchone()
         return int(row[0]) if row is not None else 0
+
+    def _get_insert_position(self) -> int:
+        current_item = self._fetchone(
+            "SELECT line_number FROM upload_items WHERE status = 'uploading' ORDER BY line_number ASC LIMIT 1"
+        )
+        if current_item is not None:
+            return int(current_item["line_number"]) + 1
+
+        next_item = self._fetchone(
+            "SELECT line_number FROM upload_items WHERE status = 'pending' ORDER BY line_number ASC LIMIT 1"
+        )
+        if next_item is not None:
+            return int(next_item["line_number"])
+
+        return self._get_highest_line_number() + 1
+
+    def _build_item_id(self, line_number: int) -> str:
+        return f"{line_number}-{uuid4().hex}"
+
+    def _shift_items_for_insert(self, insert_position: int, count: int, now: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE upload_items
+            SET line_number = line_number + ?, updated_at = ?
+            WHERE status != 'removed' AND line_number >= ?
+            """,
+            (LINE_SHIFT_OFFSET, now, insert_position),
+        )
+        self.connection.execute(
+            """
+            UPDATE upload_items
+            SET line_number = line_number - ? + ?, updated_at = ?
+            WHERE status != 'removed' AND line_number >= ?
+            """,
+            (LINE_SHIFT_OFFSET, count, now, insert_position + LINE_SHIFT_OFFSET),
+        )
 
     def get_next_item(self) -> dict[str, Any] | None:
         return self._fetchone(
