@@ -69,7 +69,12 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if message is None or not message.text:
         return
 
-    await _queue_text_payload(message, message.text, context, source_label="message")
+    await _start_text_submission(
+        message,
+        context,
+        source_label="message",
+        text=message.text,
+    )
 
 
 async def text_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,21 +82,18 @@ async def text_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if message is None or message.document is None:
         return
 
-    try:
-        telegram_file = await message.document.get_file()
-        payload = await telegram_file.download_as_bytearray()
-    except TelegramError as exc:
-        await message.reply_text(f"Could not download the text file: {exc}")
-        return
-
-    try:
-        text = bytes(payload).decode("utf-8-sig")
-    except UnicodeDecodeError:
-        await message.reply_text("Text files must be UTF-8 encoded.")
-        return
-
     filename = message.document.file_name or "file"
-    await _queue_text_payload(message, text, context, source_label=filename)
+    placeholder_message = await message.reply_text("Preparing file input...")
+    start_submission_task(
+        context.application,
+        submission_message=placeholder_message,
+        coroutine=_process_text_file_submission(
+            message=message,
+            application=context.application,
+            source_label=filename,
+            submission_message=placeholder_message,
+        ),
+    )
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -149,23 +151,23 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _queue_text_payload(
-    message: Message,
     text: str,
-    context: ContextTypes.DEFAULT_TYPE,
+    application: Application,
+    submission_message: Message,
     *,
     source_label: str,
 ) -> None:
-    application = context.application
     store = application.bot_data["store"]
 
     try:
-        urls = parse_queue_text(text)
+        urls = await asyncio.to_thread(parse_queue_text, text)
     except QueueInputError as exc:
-        await message.reply_text(f"Could not parse input: {exc}")
+        await _edit_submission_message(submission_message, f"Could not parse input: {exc}")
         return
 
     if not urls:
-        await message.reply_text(
+        await _edit_submission_message(
+            submission_message,
             "No links found. Send one link per line, a single link, or a pattern like https://example.com/{n}/2.mp4 1-100."
         )
         return
@@ -175,11 +177,12 @@ async def _queue_text_payload(
     first_line_number = enqueue_result["first_line_number"]
     last_line_number = enqueue_result["last_line_number"]
 
-    progress_message = await message.reply_text(
+    await _edit_submission_message(
+        submission_message,
         _format_progress_message(
             source_label=source_label,
             queue_state=state,
-        )
+        ),
     )
 
     start_upload_task(application)
@@ -187,11 +190,87 @@ async def _queue_text_payload(
     if first_line_number is not None and last_line_number is not None:
         start_progress_task(
             application,
-            progress_message=progress_message,
+            progress_message=submission_message,
             source_label=source_label,
             first_line_number=first_line_number,
             last_line_number=last_line_number,
         )
+
+
+async def _start_text_submission(
+    message: Message,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    source_label: str,
+    text: str,
+) -> None:
+    placeholder_message = await message.reply_text("Processing input...")
+    start_submission_task(
+        context.application,
+        submission_message=placeholder_message,
+        coroutine=_queue_text_payload(
+            text,
+            context.application,
+            placeholder_message,
+            source_label=source_label,
+        ),
+    )
+
+
+async def _process_text_file_submission(
+    *,
+    message: Message,
+    application: Application,
+    source_label: str,
+    submission_message: Message,
+) -> None:
+    if message.document is None:
+        await _edit_submission_message(submission_message, "Could not read the uploaded file.")
+        return
+
+    try:
+        telegram_file = await message.document.get_file()
+        payload = await telegram_file.download_as_bytearray()
+    except TelegramError as exc:
+        await _edit_submission_message(submission_message, f"Could not download the text file: {exc}")
+        return
+
+    try:
+        text = bytes(payload).decode("utf-8-sig")
+    except UnicodeDecodeError:
+        await _edit_submission_message(submission_message, "Text files must be UTF-8 encoded.")
+        return
+
+    await _queue_text_payload(
+        text,
+        application,
+        submission_message,
+        source_label=source_label,
+    )
+
+
+def start_submission_task(
+    application: Application,
+    *,
+    submission_message: Message,
+    coroutine: Any,
+) -> None:
+    submission_tasks = application.bot_data.setdefault("submission_tasks", {})
+    task = asyncio.create_task(
+        coroutine,
+        name=f"submission-{submission_message.message_id}",
+    )
+    task.add_done_callback(log_background_task)
+    task.add_done_callback(lambda finished: submission_tasks.pop(submission_message.message_id, None))
+    submission_tasks[submission_message.message_id] = task
+
+
+async def _edit_submission_message(message: Message, text: str) -> None:
+    try:
+        await message.edit_text(text, disable_web_page_preview=True)
+    except BadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
 
 
 def start_upload_task(application: Application) -> None:
@@ -349,10 +428,24 @@ def log_background_task(task: asyncio.Task[Any]) -> None:
 
 async def on_startup(application: Application) -> None:
     application.bot_data.setdefault("progress_tasks", {})
+    application.bot_data.setdefault("submission_tasks", {})
     start_upload_task(application)
 
 
 async def on_shutdown(application: Application) -> None:
+    submission_tasks = application.bot_data.get("submission_tasks", {})
+    for task in list(submission_tasks.values()):
+        if not task.done():
+            task.cancel()
+
+    for task in list(submission_tasks.values()):
+        if task.done():
+            continue
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     progress_tasks = application.bot_data.get("progress_tasks", {})
     for task in list(progress_tasks.values()):
         if not task.done():
