@@ -20,6 +20,8 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
+git -C "$ROOT_DIR" pull --ff-only
+
 if ! python - <<'PY'
 import importlib.util
 import sys

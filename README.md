@@ -43,7 +43,7 @@ Notes:
 python __main__.py
 ```
 
-Or use the helper script on Linux/macOS to create `.venv`, install missing requirements, and start the bot:
+Or use the helper script on Linux/macOS to pull the latest code, create `.venv`, install missing requirements, and start the bot:
 
 ```bash
 bash run.sh
