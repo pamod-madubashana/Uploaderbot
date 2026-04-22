@@ -8,11 +8,12 @@ from telegram.error import TelegramError
 
 from .config import Config
 from .downloader import DownloadedFile, download_to_file
-from .media import detect_media_type, read_queue_file, short_name_from_url
+from .media import detect_media_type, short_name_from_url
 from .store import UploadStore
 
 
 logger = logging.getLogger("uploaderbot")
+IDLE_POLL_SECONDS = 2
 
 
 def format_bytes(size_bytes: int) -> str:
@@ -35,23 +36,16 @@ class UploadWorker:
     async def run(self) -> None:
         async with self._run_lock:
             try:
-                logger.info("Loading upload queue from %s", self.config.queue_file)
-                urls = await asyncio.to_thread(read_queue_file, self.config.queue_file)
-                state = await asyncio.to_thread(self.store.sync_queue, urls)
-
-                if state["total_count"] == 0:
-                    await asyncio.to_thread(self.store.refresh_state, status="idle", last_error=None)
-                    logger.info("Queue is empty, nothing to upload.")
-                    return
-
-                logger.info("Starting uploader with %s queued items.", state["total_count"])
+                await asyncio.to_thread(self.store.recover_pending_items)
+                state = await asyncio.to_thread(self.store.refresh_state)
+                logger.info("Upload worker started with %s queued items.", state["total_count"])
 
                 while True:
                     next_item = await asyncio.to_thread(self.store.get_next_item)
                     if next_item is None:
-                        await asyncio.to_thread(self.store.refresh_state, status="completed", last_error=None)
-                        logger.info("Upload queue completed.")
-                        return
+                        await asyncio.to_thread(self.store.refresh_state)
+                        await asyncio.sleep(IDLE_POLL_SECONDS)
+                        continue
 
                     current_item = await asyncio.to_thread(self.store.mark_uploading, next_item["_id"])
                     if current_item is None:

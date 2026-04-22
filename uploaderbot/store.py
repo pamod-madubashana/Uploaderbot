@@ -19,7 +19,11 @@ logger = logging.getLogger("uploaderbot")
 class UploadStore(Protocol):
     def close(self) -> None: ...
 
-    def sync_queue(self, urls: list[str]) -> dict[str, Any]: ...
+    def enqueue_urls(self, urls: list[str]) -> dict[str, Any]: ...
+
+    def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]: ...
+
+    def recover_pending_items(self) -> None: ...
 
     def get_next_item(self) -> dict[str, Any] | None: ...
 
@@ -56,104 +60,105 @@ class MongoUploadStore:
         self.items.create_index([("status", ASCENDING), ("line_number", ASCENDING)])
         self.items.create_index([("line_number", ASCENDING)], unique=True)
 
-    def sync_queue(self, urls: list[str]) -> dict[str, Any]:
-        logger.info("Syncing %s queued items to MongoDB state store.", len(urls))
-        existing_items = {
-            item["_id"]: item
-            for item in self.items.find({}, {"url": 1, "status": 1})
-        }
-        logger.info("Fetched %s existing MongoDB queue records.", len(existing_items))
+    def enqueue_urls(self, urls: list[str]) -> dict[str, Any]:
+        if not urls:
+            return {
+                "added_count": 0,
+                "first_line_number": None,
+                "last_line_number": None,
+                "state": self.refresh_state(),
+            }
 
-        active_ids: list[str] = []
-        operations: list[UpdateOne] = []
+        logger.info("Queueing %s items into MongoDB state store.", len(urls))
         now = utc_now()
-        total_urls = len(urls)
+        starting_line_number = self._get_highest_line_number() + 1
+        operations: list[UpdateOne] = []
 
-        for line_number, url in enumerate(urls, start=1):
-            item_id = str(line_number)
-            active_ids.append(item_id)
-            existing = existing_items.get(item_id)
-
-            if existing is None:
-                operations.append(
-                    UpdateOne(
-                        {"_id": item_id},
-                        {
-                            "$set": {
-                                "line_number": line_number,
-                                "url": url,
-                                "status": "pending",
-                                "attempts": 0,
-                                "message_id": None,
-                                "media_type": None,
-                                "last_error": None,
-                                "updated_at": now,
-                            },
-                            "$setOnInsert": {"created_at": now},
-                            "$unset": {"started_at": "", "completed_at": "", "removed_at": ""},
-                        },
-                        upsert=True,
-                    )
-                )
-            else:
-                update_fields: dict[str, Any] = {"line_number": line_number, "updated_at": now}
-                update_operation: dict[str, Any] = {"$set": update_fields}
-
-                if existing.get("url") != url or existing.get("status") == "removed":
-                    update_fields.update(
-                        {
+        for offset, url in enumerate(urls):
+            line_number = starting_line_number + offset
+            operations.append(
+                UpdateOne(
+                    {"_id": str(line_number)},
+                    {
+                        "$setOnInsert": {
+                            "line_number": line_number,
                             "url": url,
                             "status": "pending",
                             "attempts": 0,
                             "message_id": None,
                             "media_type": None,
                             "last_error": None,
+                            "created_at": now,
+                            "updated_at": now,
                         }
-                    )
-                    update_operation["$unset"] = {
-                        "started_at": "",
-                        "completed_at": "",
-                        "removed_at": "",
-                    }
-
-                operations.append(
-                    UpdateOne(
-                        {"_id": item_id},
-                        update_operation,
-                    )
+                    },
+                    upsert=True,
                 )
-
-            if line_number % 100 == 0 or line_number == total_urls:
-                logger.info("Prepared MongoDB sync operations: %s/%s", line_number, total_urls)
+            )
 
         if operations:
             result = self.items.bulk_write(operations, ordered=False)
+            upserted_ids = result.upserted_ids if result.upserted_ids is not None else {}
             logger.info(
-                "MongoDB bulk sync applied: matched=%s modified=%s upserted=%s",
+                "MongoDB queue insert applied: matched=%s modified=%s upserted=%s",
                 result.matched_count,
                 result.modified_count,
-                len(result.upserted_ids),
+                len(upserted_ids),
             )
 
-        if active_ids:
-            self.items.update_many(
-                {"_id": {"$nin": active_ids}, "status": {"$ne": "removed"}},
-                {"$set": {"status": "removed", "removed_at": now, "updated_at": now}},
-            )
-        else:
-            self.items.update_many(
-                {"status": {"$ne": "removed"}},
-                {"$set": {"status": "removed", "removed_at": now, "updated_at": now}},
-            )
+        logger.info("MongoDB queue insert finished.")
 
+        return {
+            "added_count": len(urls),
+            "first_line_number": starting_line_number,
+            "last_line_number": starting_line_number + len(urls) - 1,
+            "state": self.refresh_state(status="ready", last_error=None),
+        }
+
+    def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:
+        line_filter = {"line_number": {"$gte": first_line_number, "$lte": last_line_number}}
+        total_count = self.items.count_documents(line_filter)
+        uploaded_count = self.items.count_documents({**line_filter, "status": "uploaded"})
+        current_item = self.items.find_one({**line_filter, "status": "uploading"}, sort=[("line_number", ASCENDING)])
+        next_item = self.items.find_one({**line_filter, "status": "pending"}, sort=[("line_number", ASCENDING)])
+        error_item = self.items.find_one(
+            {**line_filter, "last_error": {"$ne": None}},
+            sort=[("updated_at", -1), ("line_number", -1)],
+        )
+        status = "completed"
+        if total_count == 0:
+            status = "idle"
+        elif current_item is not None:
+            status = "uploading"
+        elif next_item is not None:
+            status = "ready"
+
+        return {
+            "first_line_number": first_line_number,
+            "last_line_number": last_line_number,
+            "total_count": total_count,
+            "uploaded_count": uploaded_count,
+            "remaining_count": max(total_count - uploaded_count, 0),
+            "current_line_number": current_item.get("line_number") if current_item else None,
+            "current_url": current_item.get("url") if current_item else None,
+            "next_line_number": next_item.get("line_number") if next_item else None,
+            "next_url": next_item.get("url") if next_item else None,
+            "last_error": error_item.get("last_error") if error_item else None,
+            "status": status,
+        }
+
+    def recover_pending_items(self) -> None:
+        now = utc_now()
         self.items.update_many(
             {"status": "uploading"},
             {"$set": {"status": "pending", "updated_at": now}, "$unset": {"started_at": ""}},
         )
 
-        logger.info("MongoDB queue sync finished.")
-
-        return self.refresh_state(status="ready")
+    def _get_highest_line_number(self) -> int:
+        item = self.items.find_one(sort=[("line_number", -1)], projection={"line_number": 1})
+        if item is None:
+            return 0
+        return int(item.get("line_number", 0))
 
     def get_next_item(self) -> dict[str, Any] | None:
         return self.items.find_one({"status": "pending"}, sort=[("line_number", ASCENDING)])
@@ -325,67 +330,95 @@ class SQLiteUploadStore:
             data["_id"] = data["id"]
         return data
 
-    def sync_queue(self, urls: list[str]) -> dict[str, Any]:
-        logger.info("Syncing %s queued items to SQLite state store.", len(urls))
+    def enqueue_urls(self, urls: list[str]) -> dict[str, Any]:
+        if not urls:
+            return {
+                "added_count": 0,
+                "first_line_number": None,
+                "last_line_number": None,
+                "state": self.refresh_state(),
+            }
+
+        logger.info("Queueing %s items into SQLite state store.", len(urls))
         now = utc_now().isoformat()
-        active_ids: list[str] = []
+        starting_line_number = self._get_highest_line_number() + 1
 
-        for line_number, url in enumerate(urls, start=1):
+        for offset, url in enumerate(urls):
+            line_number = starting_line_number + offset
             item_id = str(line_number)
-            active_ids.append(item_id)
-            existing = self._fetchone(
-                "SELECT url, status FROM upload_items WHERE id = ?",
-                (item_id,),
-            )
-
-            if existing is None:
-                self.connection.execute(
-                    """
-                    INSERT INTO upload_items (
-                        id, line_number, url, status, attempts, message_id, media_type,
-                        last_error, created_at, updated_at
-                    ) VALUES (?, ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)
-                    """,
-                    (item_id, line_number, url, now, now),
-                )
-                continue
-
-            if existing.get("url") != url or existing.get("status") == "removed":
-                self.connection.execute(
-                    """
-                    UPDATE upload_items
-                    SET line_number = ?, url = ?, status = 'pending', attempts = 0,
-                        message_id = NULL, media_type = NULL, last_error = NULL,
-                        started_at = NULL, completed_at = NULL, removed_at = NULL,
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (line_number, url, now, item_id),
-                )
-            else:
-                self.connection.execute(
-                    "UPDATE upload_items SET line_number = ?, updated_at = ? WHERE id = ?",
-                    (line_number, now, item_id),
-                )
-
-        if active_ids:
-            placeholders = ", ".join("?" for _ in active_ids)
             self.connection.execute(
-                f"UPDATE upload_items SET status = 'removed', removed_at = ?, updated_at = ? WHERE status != 'removed' AND id NOT IN ({placeholders})",
-                (now, now, *active_ids),
-            )
-        else:
-            self.connection.execute(
-                "UPDATE upload_items SET status = 'removed', removed_at = ?, updated_at = ? WHERE status != 'removed'",
-                (now, now),
+                """
+                INSERT INTO upload_items (
+                    id, line_number, url, status, attempts, message_id, media_type,
+                    last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)
+                """,
+                (item_id, line_number, url, now, now),
             )
 
+        self.connection.commit()
+        return {
+            "added_count": len(urls),
+            "first_line_number": starting_line_number,
+            "last_line_number": starting_line_number + len(urls) - 1,
+            "state": self.refresh_state(status="ready", last_error=None),
+        }
+
+    def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:
+        params = (first_line_number, last_line_number)
+        total_count = self.connection.execute(
+            "SELECT COUNT(*) FROM upload_items WHERE line_number BETWEEN ? AND ?",
+            params,
+        ).fetchone()[0]
+        uploaded_count = self.connection.execute(
+            "SELECT COUNT(*) FROM upload_items WHERE status = 'uploaded' AND line_number BETWEEN ? AND ?",
+            params,
+        ).fetchone()[0]
+        current_item = self._fetchone(
+            "SELECT * FROM upload_items WHERE status = 'uploading' AND line_number BETWEEN ? AND ? ORDER BY line_number ASC LIMIT 1",
+            params,
+        )
+        next_item = self._fetchone(
+            "SELECT * FROM upload_items WHERE status = 'pending' AND line_number BETWEEN ? AND ? ORDER BY line_number ASC LIMIT 1",
+            params,
+        )
+        error_item = self._fetchone(
+            "SELECT * FROM upload_items WHERE last_error IS NOT NULL AND line_number BETWEEN ? AND ? ORDER BY updated_at DESC, line_number DESC LIMIT 1",
+            params,
+        )
+        status = "completed"
+        if total_count == 0:
+            status = "idle"
+        elif current_item is not None:
+            status = "uploading"
+        elif next_item is not None:
+            status = "ready"
+
+        return {
+            "first_line_number": first_line_number,
+            "last_line_number": last_line_number,
+            "total_count": total_count,
+            "uploaded_count": uploaded_count,
+            "remaining_count": max(total_count - uploaded_count, 0),
+            "current_line_number": current_item.get("line_number") if current_item else None,
+            "current_url": current_item.get("url") if current_item else None,
+            "next_line_number": next_item.get("line_number") if next_item else None,
+            "next_url": next_item.get("url") if next_item else None,
+            "last_error": error_item.get("last_error") if error_item else None,
+            "status": status,
+        }
+
+    def recover_pending_items(self) -> None:
+        now = utc_now().isoformat()
         self.connection.execute(
             "UPDATE upload_items SET status = 'pending', started_at = NULL, updated_at = ? WHERE status = 'uploading'",
             (now,),
         )
         self.connection.commit()
-        return self.refresh_state(status="ready")
+
+    def _get_highest_line_number(self) -> int:
+        row = self.connection.execute("SELECT COALESCE(MAX(line_number), 0) FROM upload_items").fetchone()
+        return int(row[0]) if row is not None else 0
 
     def get_next_item(self) -> dict[str, Any] | None:
         return self._fetchone(

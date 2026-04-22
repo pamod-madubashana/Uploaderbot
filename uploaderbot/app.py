@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from telegram import Update
-from telegram.ext import Application, ApplicationBuilder, CommandHandler
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from .config import Config, load_env_file
 from .constants import BASE_DIR, ENV_FILE
-from .handlers import on_shutdown, on_startup, start_command, status_command
+from .handlers import (
+    on_shutdown,
+    on_startup,
+    start_command,
+    status_command,
+    text_file_message,
+    text_message,
+)
 from .logging_config import setup_logging
 from .store import create_store
 from .worker import UploadWorker
@@ -28,6 +35,8 @@ def build_application(config: Config) -> Application:
     application.bot_data["uploader"] = UploadWorker(application.bot, store, config)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(MessageHandler(filters.Document.TEXT, text_file_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     return application
 
 
