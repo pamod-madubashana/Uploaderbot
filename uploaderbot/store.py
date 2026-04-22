@@ -25,6 +25,20 @@ class UploadStore(Protocol):
 
     def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]: ...
 
+    def save_progress_watch(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        source_label: str,
+        first_line_number: int,
+        last_line_number: int,
+    ) -> None: ...
+
+    def list_progress_watches(self) -> list[dict[str, Any]]: ...
+
+    def delete_progress_watch(self, message_id: int) -> None: ...
+
     def recover_pending_items(self) -> None: ...
 
     def mark_removed(self, item_id: str, reason: str) -> None: ...
@@ -57,6 +71,7 @@ class MongoUploadStore:
         self.db = self.client[config.database_name]
         self.items = self.db["upload_items"]
         self.state = self.db["upload_state"]
+        self.progress_watches = self.db["progress_watches"]
         self._ensure_indexes()
 
     def close(self) -> None:
@@ -65,6 +80,7 @@ class MongoUploadStore:
     def _ensure_indexes(self) -> None:
         self.items.create_index([("status", ASCENDING), ("line_number", ASCENDING)])
         self.items.create_index([("line_number", ASCENDING)], unique=True)
+        self.progress_watches.create_index([("message_id", ASCENDING)], unique=True)
 
     def enqueue_urls(self, urls: list[str]) -> dict[str, Any]:
         if not urls:
@@ -158,6 +174,36 @@ class MongoUploadStore:
             "last_error": error_item.get("last_error") if error_item else None,
             "status": status,
         }
+
+    def save_progress_watch(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        source_label: str,
+        first_line_number: int,
+        last_line_number: int,
+    ) -> None:
+        self.progress_watches.update_one(
+            {"message_id": message_id},
+            {
+                "$set": {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "source_label": source_label,
+                    "first_line_number": first_line_number,
+                    "last_line_number": last_line_number,
+                    "updated_at": utc_now(),
+                }
+            },
+            upsert=True,
+        )
+
+    def list_progress_watches(self) -> list[dict[str, Any]]:
+        return list(self.progress_watches.find({}, sort=[("message_id", ASCENDING)]))
+
+    def delete_progress_watch(self, message_id: int) -> None:
+        self.progress_watches.delete_one({"message_id": message_id})
 
     def recover_pending_items(self) -> None:
         now = utc_now()
@@ -410,6 +456,15 @@ class SQLiteUploadStore:
                 finished_at TEXT,
                 backend TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS progress_watches (
+                message_id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                source_label TEXT NOT NULL,
+                first_line_number INTEGER NOT NULL,
+                last_line_number INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         self.connection.commit()
@@ -505,6 +560,48 @@ class SQLiteUploadStore:
             "last_error": error_item.get("last_error") if error_item else None,
             "status": status,
         }
+
+    def save_progress_watch(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        source_label: str,
+        first_line_number: int,
+        last_line_number: int,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO progress_watches (
+                message_id, chat_id, source_label, first_line_number, last_line_number, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                source_label = excluded.source_label,
+                first_line_number = excluded.first_line_number,
+                last_line_number = excluded.last_line_number,
+                updated_at = excluded.updated_at
+            """,
+            (
+                message_id,
+                chat_id,
+                source_label,
+                first_line_number,
+                last_line_number,
+                utc_now().isoformat(),
+            ),
+        )
+        self.connection.commit()
+
+    def list_progress_watches(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM progress_watches ORDER BY message_id ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_progress_watch(self, message_id: int) -> None:
+        self.connection.execute("DELETE FROM progress_watches WHERE message_id = ?", (message_id,))
+        self.connection.commit()
 
     def recover_pending_items(self) -> None:
         now = utc_now().isoformat()

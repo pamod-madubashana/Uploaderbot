@@ -169,6 +169,33 @@ class StoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_progress_watches_persist_and_can_be_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
+            store = SQLiteUploadStore(config)
+            try:
+                store.save_progress_watch(
+                    chat_id=123,
+                    message_id=456,
+                    source_label="message",
+                    first_line_number=10,
+                    last_line_number=20,
+                )
+
+                watches = store.list_progress_watches()
+
+                self.assertEqual(len(watches), 1)
+                self.assertEqual(watches[0]["chat_id"], 123)
+                self.assertEqual(watches[0]["message_id"], 456)
+                self.assertEqual(watches[0]["first_line_number"], 10)
+                self.assertEqual(watches[0]["last_line_number"], 20)
+
+                store.delete_progress_watch(456)
+
+                self.assertEqual(store.list_progress_watches(), [])
+            finally:
+                store.close()
+
     def test_create_store_uses_sqlite_uri(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
