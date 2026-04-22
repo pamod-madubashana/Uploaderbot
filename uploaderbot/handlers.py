@@ -18,6 +18,11 @@ PROGRESS_BAR_WIDTH = 12
 PROGRESS_UPDATE_SECONDS = 10
 MAX_ERROR_LENGTH = 160
 
+DATABASE_LABELS = {
+    "mongo": "MongoDB",
+    "sqlite": "SQLite",
+}
+
 
 def build_help_text() -> str:
     return (
@@ -97,9 +102,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     current_line = state.get("current_line_number")
     next_line = state.get("next_line_number")
     last_error = state.get("last_error") or "-"
+    database_name = DATABASE_LABELS.get(str(state.get("backend", "unknown")), str(state.get("backend", "unknown")))
 
     lines = [
-        f"Backend: {state.get('backend', 'unknown')}",
+        f"Database: {database_name}",
         f"Status: {state.get('status', 'unknown')}",
         f"Uploaded: {state.get('uploaded_count', 0)}/{state.get('total_count', 0)}",
         f"Current line: {current_line if current_line is not None else '-'}",

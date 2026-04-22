@@ -33,9 +33,13 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(progress["uploaded_count"], 0)
                 self.assertEqual(progress["next_line_number"], 1)
 
-                uploading_item = store.mark_uploading("1")
+                next_item = store.get_next_item()
+                self.assertIsNotNone(next_item)
+                assert next_item is not None
+                uploading_item = store.mark_uploading(next_item["_id"])
                 self.assertIsNotNone(uploading_item)
-                store.mark_uploaded("1", 1001, "video")
+                assert uploading_item is not None
+                store.mark_uploaded(uploading_item["_id"], 1001, "video")
 
                 progress = store.get_batch_progress(1, 3)
                 self.assertEqual(progress["uploaded_count"], 1)
@@ -55,16 +59,86 @@ class StoreTests(unittest.TestCase):
                     ]
                 )
 
-                current_item = store.mark_uploading("1")
+                next_item = store.get_next_item()
+                self.assertIsNotNone(next_item)
+                assert next_item is not None
+                current_item = store.mark_uploading(next_item["_id"])
                 self.assertIsNotNone(current_item)
+                assert current_item is not None
 
-                store.mark_removed("1", "Removed by /skip")
+                store.mark_removed(current_item["_id"], "Removed by /skip")
 
                 progress = store.get_batch_progress(1, 2)
                 self.assertEqual(progress["total_count"], 1)
                 self.assertEqual(progress["uploaded_count"], 0)
                 self.assertEqual(progress["next_line_number"], 2)
                 self.assertEqual(progress["last_error"], "Removed by /skip")
+            finally:
+                store.close()
+
+    def test_enqueue_urls_inserts_new_items_before_existing_pending_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
+            store = SQLiteUploadStore(config)
+            try:
+                store.enqueue_urls(
+                    [
+                        "https://example.com/1.mp4",
+                        "https://example.com/2.mp4",
+                        "https://example.com/3.mp4",
+                    ]
+                )
+                current_item = store.get_next_item()
+                self.assertIsNotNone(current_item)
+                assert current_item is not None
+                current_item = store.mark_uploading(current_item["_id"])
+                self.assertIsNotNone(current_item)
+
+                result = store.enqueue_urls(["https://example.com/new.mp4"])
+
+                self.assertEqual(result["first_line_number"], 2)
+                next_item = store.get_next_item()
+                self.assertIsNotNone(next_item)
+                assert next_item is not None
+                self.assertEqual(next_item["url"], "https://example.com/new.mp4")
+
+                original_second = store._fetchone(
+                    "SELECT * FROM upload_items WHERE url = ?",
+                    ("https://example.com/2.mp4",),
+                )
+                original_third = store._fetchone(
+                    "SELECT * FROM upload_items WHERE url = ?",
+                    ("https://example.com/3.mp4",),
+                )
+                self.assertIsNotNone(original_second)
+                self.assertIsNotNone(original_third)
+                assert original_second is not None
+                assert original_third is not None
+                self.assertEqual(original_second["line_number"], 3)
+                self.assertEqual(original_third["line_number"], 4)
+            finally:
+                store.close()
+
+    def test_batch_progress_reports_queued_when_other_item_is_uploading(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = build_config(Path(temp_dir), database_uri=f"sqlite:///{Path(temp_dir) / 'state.db'}")
+            store = SQLiteUploadStore(config)
+            try:
+                store.enqueue_urls(
+                    [
+                        "https://example.com/1.mp4",
+                        "https://example.com/2.mp4",
+                    ]
+                )
+                next_item = store.get_next_item()
+                self.assertIsNotNone(next_item)
+                assert next_item is not None
+                store.mark_uploading(next_item["_id"])
+
+                progress = store.get_batch_progress(2, 2)
+
+                self.assertEqual(progress["status"], "queued")
+                self.assertEqual(progress["next_line_number"], 2)
             finally:
                 store.close()
 
