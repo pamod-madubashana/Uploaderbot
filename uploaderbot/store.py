@@ -25,6 +25,8 @@ class UploadStore(Protocol):
 
     def recover_pending_items(self) -> None: ...
 
+    def mark_removed(self, item_id: str, reason: str) -> None: ...
+
     def get_next_item(self) -> dict[str, Any] | None: ...
 
     def mark_uploading(self, item_id: str) -> dict[str, Any] | None: ...
@@ -116,11 +118,15 @@ class MongoUploadStore:
         }
 
     def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:
+        active_line_filter = {
+            "line_number": {"$gte": first_line_number, "$lte": last_line_number},
+            "status": {"$ne": "removed"},
+        }
         line_filter = {"line_number": {"$gte": first_line_number, "$lte": last_line_number}}
-        total_count = self.items.count_documents(line_filter)
-        uploaded_count = self.items.count_documents({**line_filter, "status": "uploaded"})
-        current_item = self.items.find_one({**line_filter, "status": "uploading"}, sort=[("line_number", ASCENDING)])
-        next_item = self.items.find_one({**line_filter, "status": "pending"}, sort=[("line_number", ASCENDING)])
+        total_count = self.items.count_documents(active_line_filter)
+        uploaded_count = self.items.count_documents({**active_line_filter, "status": "uploaded"})
+        current_item = self.items.find_one({**active_line_filter, "status": "uploading"}, sort=[("line_number", ASCENDING)])
+        next_item = self.items.find_one({**active_line_filter, "status": "pending"}, sort=[("line_number", ASCENDING)])
         error_item = self.items.find_one(
             {**line_filter, "last_error": {"$ne": None}},
             sort=[("updated_at", -1), ("line_number", -1)],
@@ -152,6 +158,21 @@ class MongoUploadStore:
         self.items.update_many(
             {"status": "uploading"},
             {"$set": {"status": "pending", "updated_at": now}, "$unset": {"started_at": ""}},
+        )
+
+    def mark_removed(self, item_id: str, reason: str) -> None:
+        now = utc_now()
+        self.items.update_one(
+            {"_id": item_id},
+            {
+                "$set": {
+                    "status": "removed",
+                    "last_error": reason,
+                    "removed_at": now,
+                    "updated_at": now,
+                },
+                "$unset": {"started_at": ""},
+            },
         )
 
     def _get_highest_line_number(self) -> int:
@@ -367,7 +388,7 @@ class SQLiteUploadStore:
     def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:
         params = (first_line_number, last_line_number)
         total_count = self.connection.execute(
-            "SELECT COUNT(*) FROM upload_items WHERE line_number BETWEEN ? AND ?",
+            "SELECT COUNT(*) FROM upload_items WHERE status != 'removed' AND line_number BETWEEN ? AND ?",
             params,
         ).fetchone()[0]
         uploaded_count = self.connection.execute(
@@ -413,6 +434,18 @@ class SQLiteUploadStore:
         self.connection.execute(
             "UPDATE upload_items SET status = 'pending', started_at = NULL, updated_at = ? WHERE status = 'uploading'",
             (now,),
+        )
+        self.connection.commit()
+
+    def mark_removed(self, item_id: str, reason: str) -> None:
+        now = utc_now().isoformat()
+        self.connection.execute(
+            """
+            UPDATE upload_items
+            SET status = 'removed', last_error = ?, removed_at = ?, started_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (reason, now, now, item_id),
         )
         self.connection.commit()
 

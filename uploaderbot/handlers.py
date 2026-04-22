@@ -24,7 +24,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await update.effective_message.reply_text(
-        "Send a text file with links, a single link, or a pattern like https://site.com/{n}/2.mp4 1-100 or https://site.com/{n}/{n}.mp4 1-100. Use /status to track the whole queue."
+        "Send a text file with links, a single link, or a pattern like https://site.com/{n}/2.mp4 1-100 or https://site.com/{n}/{n}.mp4 1-100. Use /status to track the whole queue and /skip to remove the current item."
     )
 
 
@@ -78,6 +78,22 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Last error: {last_error}",
     ]
     await update.effective_message.reply_text("\n".join(lines))
+
+
+async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    uploader = context.application.bot_data["uploader"]
+    skipped_item = await uploader.skip_current_item()
+    if skipped_item is None:
+        await message.reply_text("No upload is running right now.")
+        return
+
+    await message.reply_text(
+        f"Removing current item: line {skipped_item['line_number']} - {short_name_from_url(str(skipped_item['url']))}"
+    )
 
 
 async def _queue_text_payload(
