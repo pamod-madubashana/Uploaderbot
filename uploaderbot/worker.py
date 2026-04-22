@@ -137,8 +137,7 @@ class UploadWorker:
                 raise
 
     async def _send_item(self, item: dict[str, object]):
-        total_count = (await asyncio.to_thread(self.store.get_state)).get("total_count", 0)
-        caption = f"{item['line_number']}/{total_count} - {short_name_from_url(str(item['url']))}"
+        caption = short_name_from_url(str(item["url"]))
 
         media_type = detect_media_type(str(item["url"]))
         logger.info(
