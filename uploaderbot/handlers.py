@@ -181,11 +181,13 @@ async def _queue_text_payload(
 
 
 def start_upload_task(application: Application) -> None:
+    uploader = application.bot_data["uploader"]
+    uploader.notify_queue_changed()
+
     existing_task = application.bot_data.get("upload_task")
     if existing_task and not existing_task.done():
         return
 
-    uploader = application.bot_data["uploader"]
     task = asyncio.create_task(uploader.run(), name="upload-worker")
     task.add_done_callback(log_background_task)
     application.bot_data["upload_task"] = task

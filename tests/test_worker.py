@@ -14,6 +14,20 @@ from uploaderbot.worker import UploadWorker
 
 
 class UploadWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_notify_queue_changed_wakes_sleeping_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            config = build_config(base_dir)
+            store = SQLiteUploadStore(config)
+            worker = UploadWorker(object(), store, config)
+            try:
+                wait_task = asyncio.create_task(worker._wait_for_wake_or_timeout(5))
+                await asyncio.sleep(0.05)
+                worker.notify_queue_changed()
+                await asyncio.wait_for(wait_task, timeout=0.5)
+            finally:
+                store.close()
+
     async def test_worker_removes_404_item_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
