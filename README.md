@@ -80,6 +80,7 @@ https://example.com/{folder}/{file}.mp4 folder=1-100 file=2
 ## Commands
 
 - `/start` shows the supported input formats.
+- `/help` shows all available commands.
 - `/status` shows the global queue status.
 - `/skip` or `/remove_current` removes the item that is currently downloading or uploading.
 

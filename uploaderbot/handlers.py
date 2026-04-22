@@ -19,6 +19,17 @@ PROGRESS_UPDATE_SECONDS = 10
 MAX_ERROR_LENGTH = 160
 
 
+def build_help_text() -> str:
+    return (
+        "🛠️ Available commands\n\n"
+        "▶️ /start - show a quick welcome message\n"
+        "❓ /help - show all available commands\n"
+        "📊 /status - show current queue progress\n"
+        "⏭️ /skip - remove the current item\n"
+        "⏭️ /remove_current - same as /skip"
+    )
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
@@ -30,7 +41,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "🧩 Send a pattern like `site.com/{n}/2.mp4 1-100`\n"
         "🔁 Or use `site.com/{n}/{n}.mp4 1-100`\n\n"
         "📊 `/status` shows queue progress\n"
-        "⏭️ `/skip` removes the current item",
+        "⏭️ `/skip` removes the current item\n"
+        "❓ `/help` shows all commands",
+        disable_web_page_preview=True,
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None:
+        return
+
+    await update.effective_message.reply_text(
+        build_help_text(),
         disable_web_page_preview=True,
     )
 
