@@ -24,7 +24,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await update.effective_message.reply_text(
-        "Send a text file with links, a single link, or a pattern like https://site.com/{n}/2.mp4 1-100 or https://site.com/{n}/{n}.mp4 1-100. Use /status to track the whole queue and /skip to remove the current item."
+        "🎬 Uploader bot is ready.\n\n"
+        "📄 Send a text file with links\n"
+        "🔗 Send a single direct link\n"
+        "🧩 Send a pattern like `site.com/{n}/2.mp4 1-100`\n"
+        "🔁 Or use `site.com/{n}/{n}.mp4 1-100`\n\n"
+        "📊 `/status` shows queue progress\n"
+        "⏭️ `/skip` removes the current item",
+        disable_web_page_preview=True,
     )
 
 
