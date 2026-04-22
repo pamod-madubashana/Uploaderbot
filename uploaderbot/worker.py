@@ -4,16 +4,18 @@ import asyncio
 import logging
 from pathlib import Path
 
+from telegram import Bot
 from telegram.error import TelegramError
 
 from .config import Config
-from .downloader import DownloadedFile, download_to_file
+from .downloader import DownloadTooLargeError, DownloadedFile, download_to_file
 from .media import detect_media_type, short_name_from_url
 from .store import UploadStore
 
 
 logger = logging.getLogger("uploaderbot")
 IDLE_POLL_SECONDS = 2
+SKIP_REASON = "Removed by /skip"
 
 
 def format_bytes(size_bytes: int) -> str:
@@ -32,6 +34,9 @@ class UploadWorker:
         self.store = store
         self.config = config
         self._run_lock = asyncio.Lock()
+        self._current_item: dict[str, object] | None = None
+        self._current_item_task: asyncio.Task[tuple[object, str]] | None = None
+        self._skip_requested_item_ids: set[str] = set()
 
     async def run(self) -> None:
         async with self._run_lock:
@@ -60,15 +65,39 @@ class UploadWorker:
                         short_name_from_url(current_item["url"]),
                     )
 
+                    item_id = str(current_item["_id"])
+                    item_task = asyncio.create_task(
+                        self._send_item(current_item),
+                        name=f"upload-item-{item_id}",
+                    )
+                    self._current_item = current_item
+                    self._current_item_task = item_task
+
                     try:
-                        message, media_type = await self._send_item(current_item)
+                        message, media_type = await item_task
                     except asyncio.CancelledError:
+                        if item_id in self._skip_requested_item_ids:
+                            self._skip_requested_item_ids.discard(item_id)
+                            await asyncio.to_thread(self.store.mark_removed, item_id, SKIP_REASON)
+                            await asyncio.to_thread(self.store.refresh_state, last_error=SKIP_REASON)
+                            logger.info("Removed current item after /skip: line %s", current_item["line_number"])
+                            continue
                         raise
+                    except DownloadTooLargeError as exc:
+                        error_message = str(exc)
+                        await asyncio.to_thread(self.store.mark_removed, item_id, error_message)
+                        await asyncio.to_thread(self.store.refresh_state, last_error=error_message)
+                        logger.info(
+                            "Removed oversized file from queue on line %s: %s",
+                            current_item["line_number"],
+                            error_message,
+                        )
+                        continue
                     except TelegramError as exc:
                         error_message = str(exc)
                         await asyncio.to_thread(
                             self.store.mark_pending_after_error,
-                            current_item["_id"],
+                            item_id,
                             error_message,
                         )
                         await asyncio.to_thread(
@@ -84,10 +113,16 @@ class UploadWorker:
                         )
                         await asyncio.sleep(self.config.retry_delay_seconds)
                         continue
+                    finally:
+                        if self._current_item_task is item_task:
+                            self._current_item_task = None
+                        if self._current_item == current_item:
+                            self._current_item = None
+                        self._skip_requested_item_ids.discard(item_id)
 
                     await asyncio.to_thread(
                         self.store.mark_uploaded,
-                        current_item["_id"],
+                        item_id,
                         getattr(message, "message_id", None),
                         media_type,
                     )
@@ -111,7 +146,11 @@ class UploadWorker:
             item["line_number"],
             item["url"],
         )
-        downloaded_file = await download_to_file(str(item["url"]), self.config.download_dir)
+        downloaded_file = await download_to_file(
+            str(item["url"]),
+            self.config.download_dir,
+            max_size_bytes=self.config.max_download_size_bytes,
+        )
         logger.info(
             "Downloaded line %s to local file: %s (%s)",
             item["line_number"],
@@ -187,3 +226,14 @@ class UploadWorker:
             return
 
         logger.info("Deleted local file: %s", path)
+
+    async def skip_current_item(self) -> dict[str, object] | None:
+        current_item = self._current_item
+        current_task = self._current_item_task
+
+        if current_item is None or current_task is None or current_task.done():
+            return None
+
+        self._skip_requested_item_ids.add(str(current_item["_id"]))
+        current_task.cancel()
+        return current_item

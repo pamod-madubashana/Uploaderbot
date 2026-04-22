@@ -33,6 +33,7 @@ class Config:
     chat_id: int
     queue_file: Path
     download_dir: Path
+    max_download_size_bytes: int
     retry_delay_seconds: int
     sqlite_db_file: Path
 
@@ -44,9 +45,12 @@ class Config:
         database_name = os.getenv("DATABASE_NAME", "telegram_uploader")
         queue_file = base_dir / os.getenv("QUEUE_FILE", "vvv.txt")
         download_dir = base_dir / os.getenv("DOWNLOAD_DIR", "downloads")
+        max_download_size_mb = int(os.getenv("MAX_DOWNLOAD_SIZE_MB", "50"))
         retry_delay_seconds = int(os.getenv("RETRY_DELAY_SECONDS", "60"))
         sqlite_db_file = base_dir / os.getenv("SQLITE_DB_FILE", "upload_state.db")
 
+        if max_download_size_mb < 1:
+            raise RuntimeError("MAX_DOWNLOAD_SIZE_MB must be at least 1")
         if retry_delay_seconds < 1:
             raise RuntimeError("RETRY_DELAY_SECONDS must be at least 1")
 
@@ -57,6 +61,7 @@ class Config:
             chat_id=chat_id,
             queue_file=queue_file,
             download_dir=download_dir,
+            max_download_size_bytes=max_download_size_mb * 1024 * 1024,
             retry_delay_seconds=retry_delay_seconds,
             sqlite_db_file=sqlite_db_file,
         )
