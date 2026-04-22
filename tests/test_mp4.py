@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from uploaderbot.mp4 import prepare_video_file, rewrite_faststart
 
@@ -36,6 +37,33 @@ class Mp4Tests(unittest.TestCase):
         self.assertEqual(attributes.width, 320)
         self.assertEqual(attributes.height, 180)
         self.assertTrue(attributes.supports_streaming)
+
+    def test_prepare_video_file_creates_thumbnail_when_ffmpeg_available(self) -> None:
+        blob = build_sample_mp4(moov_after_mdat=True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.mp4"
+            path.write_bytes(blob)
+
+            def fake_run(command, capture_output, text, check):
+                thumbnail_path = Path(command[-1])
+                thumbnail_path.write_bytes(b"jpeg")
+
+                class Result:
+                    returncode = 0
+                    stderr = ""
+                    stdout = ""
+
+                return Result()
+
+            with patch("uploaderbot.mp4.resolve_ffmpeg_executable", return_value="ffmpeg"):
+                with patch("uploaderbot.mp4.subprocess.run", side_effect=fake_run):
+                    attributes = prepare_video_file(path)
+
+            thumbnail_path = attributes.thumbnail_path
+            self.assertIsNotNone(thumbnail_path)
+            assert thumbnail_path is not None
+            self.assertTrue(thumbnail_path.exists())
 
 
 def build_sample_mp4(*, moov_after_mdat: bool) -> bytes:

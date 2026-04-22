@@ -172,6 +172,8 @@ class UploadWorker:
                 video_attributes=video_attributes,
             )
         finally:
+            if video_attributes.thumbnail_path is not None:
+                await self._delete_downloaded_file(video_attributes.thumbnail_path)
             await self._delete_downloaded_file(downloaded_file.path)
 
     async def _upload_downloaded_file(
@@ -198,6 +200,8 @@ class UploadWorker:
                 duration=video_attributes.duration_seconds,
                 width=video_attributes.width,
                 height=video_attributes.height,
+                thumbnail=video_attributes.thumbnail_path,
+                cover=video_attributes.thumbnail_path,
                 supports_streaming=video_attributes.supports_streaming,
                 read_timeout=600,
                 write_timeout=600,

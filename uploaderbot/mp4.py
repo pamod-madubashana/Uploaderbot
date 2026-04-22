@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import math
+import importlib
+import logging
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +20,10 @@ CONTAINER_BOX_TYPES = {
     "trak",
     "udta",
 }
+THUMBNAIL_SUFFIX = ".telegram-thumb.jpg"
+
+
+logger = logging.getLogger("uploaderbot")
 
 
 class Mp4ProcessingError(ValueError):
@@ -44,6 +52,7 @@ class VideoAttributes:
     width: int | None = None
     height: int | None = None
     supports_streaming: bool = False
+    thumbnail_path: Path | None = None
 
 
 def prepare_video_file(path: Path) -> VideoAttributes:
@@ -65,7 +74,9 @@ def prepare_video_file(path: Path) -> VideoAttributes:
         if moov_atom is None:
             raise Mp4ProcessingError("Rewritten MP4 is missing moov atom")
 
-    return extract_video_attributes(blob, moov_atom)
+    attributes = extract_video_attributes(blob, moov_atom)
+    attributes.thumbnail_path = build_video_thumbnail(path, attributes.duration_seconds)
+    return attributes
 
 
 def rewrite_faststart(blob: bytes, top_level_atoms: list[Atom] | None = None) -> bytes:
@@ -144,6 +155,59 @@ def read_mdhd_duration_seconds(blob: bytes, mdhd_atom: Atom) -> int | None:
     if timescale <= 0 or duration <= 0:
         return None
     return max(1, math.ceil(duration / timescale))
+
+
+def build_video_thumbnail(path: Path, duration_seconds: int | None) -> Path | None:
+    ffmpeg_executable = resolve_ffmpeg_executable()
+    if ffmpeg_executable is None:
+        return None
+
+    thumbnail_path = path.with_name(f"{path.stem}{THUMBNAIL_SUFFIX}")
+    thumbnail_path.unlink(missing_ok=True)
+    timestamp_seconds = thumbnail_timestamp_seconds(duration_seconds)
+    command = [
+        ffmpeg_executable,
+        "-y",
+        "-ss",
+        f"{timestamp_seconds:.3f}",
+        "-i",
+        str(path),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=min(320\\,iw):-2",
+        "-q:v",
+        "2",
+        str(thumbnail_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not thumbnail_path.exists() or thumbnail_path.stat().st_size == 0:
+        thumbnail_path.unlink(missing_ok=True)
+        stderr_text = result.stderr.strip() or result.stdout.strip() or "unknown ffmpeg error"
+        logger.warning("Could not create thumbnail for %s: %s", path, stderr_text)
+        return None
+    return thumbnail_path
+
+
+def resolve_ffmpeg_executable() -> str | None:
+    try:
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+    except ImportError:
+        return shutil.which("ffmpeg")
+
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        logger.warning("Could not resolve imageio ffmpeg binary: %s", exc)
+        return shutil.which("ffmpeg")
+
+
+def thumbnail_timestamp_seconds(duration_seconds: int | None) -> float:
+    if duration_seconds is None:
+        return 1.0
+    if duration_seconds <= 1:
+        return 0.0
+    return min(max(duration_seconds * 0.2, 0.5), 3.0)
 
 
 def _patch_chunk_offsets_recursive(blob: bytearray, start: int, end: int, delta: int) -> None:
