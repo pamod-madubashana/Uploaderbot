@@ -28,6 +28,7 @@ This file gives coding agents a compact operating guide for this repository.
 - Optional env vars:
   - `DATABASE_NAME`
   - `DOWNLOAD_DIR`
+  - `MAX_DOWNLOAD_SIZE_MB`
   - `RETRY_DELAY_SECONDS`
   - `SQLITE_DB_FILE`
 - MongoDB is preferred when `DATABASE` points to Mongo, but the app falls back to SQLite if Mongo connection fails.
@@ -92,6 +93,7 @@ python -m unittest tests.test_store.StoreTests.test_create_store_falls_back_when
 - For application wiring changes: ensure imports still resolve and handlers still register in `uploaderbot/app.py`.
 - For queue/state changes: verify both MongoDB and SQLite code paths remain valid.
 - For Telegram progress-message changes: make sure the update loop still tolerates `message is not modified` errors.
+- For download-limit changes: verify oversized files are skipped cleanly and the worker continues with the next item.
 
 ## Code Style Guidelines
 
@@ -174,6 +176,7 @@ python -m unittest tests.test_store.StoreTests.test_create_store_falls_back_when
 
 - Reply directly to the user’s source message when acknowledging queued input.
 - Keep `/start` and `/status` responses concise.
+- Keep `/skip` or similar control commands short and explicit about what item was removed.
 - Progress messages should remain readable in plain text.
 - If editing a message repeatedly, tolerate benign “message is not modified” failures.
 
