@@ -42,6 +42,30 @@ class ParseQueueTextTests(unittest.TestCase):
             ],
         )
 
+    def test_expands_block1000_placeholder_from_range(self) -> None:
+        self.assertEqual(
+            parse_queue_text(
+                "https://example.com/{block1000:n}/{n}/{n}.mp4 2000-2002"
+            ),
+            [
+                "https://example.com/2000/2000/2000.mp4",
+                "https://example.com/2000/2001/2001.mp4",
+                "https://example.com/2000/2002/2002.mp4",
+            ],
+        )
+
+    def test_expands_block1000_placeholder_across_block_boundary(self) -> None:
+        self.assertEqual(
+            parse_queue_text(
+                "https://example.com/{block1000:n}/{n}/{n}.mp4 2999-3001"
+            ),
+            [
+                "https://example.com/2000/2999/2999.mp4",
+                "https://example.com/3000/3000/3000.mp4",
+                "https://example.com/3000/3001/3001.mp4",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
