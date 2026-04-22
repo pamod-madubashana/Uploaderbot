@@ -114,7 +114,7 @@ class MongoUploadStore:
             "added_count": len(urls),
             "first_line_number": starting_line_number,
             "last_line_number": starting_line_number + len(urls) - 1,
-            "state": self.refresh_state(status="ready", last_error=None),
+            "state": self.refresh_state(last_error=None),
         }
 
     def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:
@@ -382,7 +382,7 @@ class SQLiteUploadStore:
             "added_count": len(urls),
             "first_line_number": starting_line_number,
             "last_line_number": starting_line_number + len(urls) - 1,
-            "state": self.refresh_state(status="ready", last_error=None),
+            "state": self.refresh_state(last_error=None),
         }
 
     def get_batch_progress(self, first_line_number: int, last_line_number: int) -> dict[str, Any]:

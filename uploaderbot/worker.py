@@ -35,6 +35,7 @@ class UploadWorker:
         self.store = store
         self.config = config
         self._run_lock = asyncio.Lock()
+        self._wake_event = asyncio.Event()
         self._current_item: dict[str, object] | None = None
         self._current_item_task: asyncio.Task[tuple[object, str]] | None = None
         self._skip_requested_item_ids: set[str] = set()
@@ -50,7 +51,7 @@ class UploadWorker:
                     next_item = await asyncio.to_thread(self.store.get_next_item)
                     if next_item is None:
                         await asyncio.to_thread(self.store.refresh_state)
-                        await asyncio.sleep(IDLE_POLL_SECONDS)
+                        await self._wait_for_wake_or_timeout(IDLE_POLL_SECONDS)
                         continue
 
                     current_item = await asyncio.to_thread(self.store.mark_uploading, next_item["_id"])
@@ -248,6 +249,9 @@ class UploadWorker:
         current_task.cancel()
         return current_item
 
+    def notify_queue_changed(self) -> None:
+        self._wake_event.set()
+
     async def _remove_failed_item(
         self,
         current_item: dict[str, object],
@@ -284,7 +288,19 @@ class UploadWorker:
             self.config.retry_delay_seconds,
             error_message,
         )
-        await asyncio.sleep(self.config.retry_delay_seconds)
+        await self._wait_for_wake_or_timeout(self.config.retry_delay_seconds)
 
     def _format_http_error(self, exc: httpx.HTTPStatusError) -> str:
         return f"HTTP {exc.response.status_code} for {exc.request.url}"
+
+    async def _wait_for_wake_or_timeout(self, timeout_seconds: float) -> None:
+        if self._wake_event.is_set():
+            self._wake_event.clear()
+            return
+
+        try:
+            await asyncio.wait_for(self._wake_event.wait(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return
+        finally:
+            self._wake_event.clear()
