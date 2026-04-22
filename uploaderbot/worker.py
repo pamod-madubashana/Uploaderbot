@@ -4,12 +4,12 @@ import asyncio
 import logging
 from pathlib import Path
 
-from telegram import Bot
 from telegram.error import TelegramError
 
 from .config import Config
 from .downloader import DownloadTooLargeError, DownloadedFile, download_to_file
 from .media import detect_media_type, short_name_from_url
+from .mp4 import Mp4ProcessingError, VideoAttributes, prepare_video_file
 from .store import UploadStore
 
 
@@ -151,6 +151,12 @@ class UploadWorker:
             self.config.download_dir,
             max_size_bytes=self.config.max_download_size_bytes,
         )
+        video_attributes = VideoAttributes()
+        if media_type == "video":
+            try:
+                video_attributes = await asyncio.to_thread(prepare_video_file, downloaded_file.path)
+            except Mp4ProcessingError as exc:
+                logger.warning("Could not prepare MP4 metadata for %s: %s", downloaded_file.path, exc)
         logger.info(
             "Downloaded line %s to local file: %s (%s)",
             item["line_number"],
@@ -159,7 +165,12 @@ class UploadWorker:
         )
 
         try:
-            return await self._upload_downloaded_file(downloaded_file, media_type, caption)
+            return await self._upload_downloaded_file(
+                downloaded_file,
+                media_type,
+                caption,
+                video_attributes=video_attributes,
+            )
         finally:
             await self._delete_downloaded_file(downloaded_file.path)
 
@@ -168,6 +179,8 @@ class UploadWorker:
         downloaded_file: DownloadedFile,
         media_type: str,
         caption: str,
+        *,
+        video_attributes: VideoAttributes,
     ):
         logger.info(
             "Uploading local file to Telegram as %s: %s (%s)",
@@ -182,7 +195,10 @@ class UploadWorker:
                 video=downloaded_file.path,
                 filename=downloaded_file.filename,
                 caption=caption,
-                supports_streaming=True,
+                duration=video_attributes.duration_seconds,
+                width=video_attributes.width,
+                height=video_attributes.height,
+                supports_streaming=video_attributes.supports_streaming,
                 read_timeout=600,
                 write_timeout=600,
                 connect_timeout=60,
