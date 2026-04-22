@@ -29,6 +29,8 @@ class UploadStore(Protocol):
 
     def mark_removed(self, item_id: str, reason: str) -> None: ...
 
+    def remove_active_items(self, reason: str) -> int: ...
+
     def get_next_item(self) -> dict[str, Any] | None: ...
 
     def mark_uploading(self, item_id: str) -> dict[str, Any] | None: ...
@@ -178,6 +180,22 @@ class MongoUploadStore:
                 "$unset": {"started_at": ""},
             },
         )
+
+    def remove_active_items(self, reason: str) -> int:
+        now = utc_now()
+        result = self.items.update_many(
+            {"status": {"$nin": ["uploaded", "removed"]}},
+            {
+                "$set": {
+                    "status": "removed",
+                    "last_error": reason,
+                    "removed_at": now,
+                    "updated_at": now,
+                },
+                "$unset": {"started_at": ""},
+            },
+        )
+        return int(result.modified_count)
 
     def _get_highest_line_number(self) -> int:
         item = self.items.find_one(sort=[("line_number", -1)], projection={"line_number": 1})
@@ -507,6 +525,19 @@ class SQLiteUploadStore:
             (reason, now, now, item_id),
         )
         self.connection.commit()
+
+    def remove_active_items(self, reason: str) -> int:
+        now = utc_now().isoformat()
+        cursor = self.connection.execute(
+            """
+            UPDATE upload_items
+            SET status = 'removed', last_error = ?, removed_at = ?, started_at = NULL, updated_at = ?
+            WHERE status NOT IN ('uploaded', 'removed')
+            """,
+            (reason, now, now),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
 
     def _get_highest_line_number(self) -> int:
         row = self.connection.execute("SELECT COALESCE(MAX(line_number), 0) FROM upload_items").fetchone()
