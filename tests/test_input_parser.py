@@ -66,6 +66,18 @@ class ParseQueueTextTests(unittest.TestCase):
             ],
         )
 
+    def test_expands_index1000_placeholder_across_block_boundary(self) -> None:
+        self.assertEqual(
+            parse_queue_text(
+                "https://example.com/{block1000:n}/{index1000:n}/{index1000:n}.mp4 999-1001"
+            ),
+            [
+                "https://example.com/0/999/999.mp4",
+                "https://example.com/1000/1000/1000.mp4",
+                "https://example.com/1000/1/1.mp4",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
