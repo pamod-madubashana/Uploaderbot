@@ -12,7 +12,13 @@ This bot accepts links directly from Telegram messages, downloads the media, and
 
 ## Setup
 
-Create a `.env` file in the project root:
+Copy `.env.sample` to `.env`, then fill in your real values:
+
+```bash
+copy .env.sample .env
+```
+
+Use this template:
 
 ```env
 TOKEN=your_bot_token
@@ -20,6 +26,7 @@ CHAT_ID=-1001234567890
 DATABASE=mongodb://localhost:27017
 DATABASE_NAME=telegram_uploader
 DOWNLOAD_DIR=downloads
+MAX_DOWNLOAD_SIZE_MB=50
 RETRY_DELAY_SECONDS=60
 SQLITE_DB_FILE=upload_state.db
 ```
@@ -28,6 +35,7 @@ Notes:
 
 - To force SQLite only, set `DATABASE=sqlite:///upload_state.db`.
 - If `DATABASE` points to MongoDB and the connection fails, the bot uses SQLite automatically.
+- Files larger than `MAX_DOWNLOAD_SIZE_MB` are skipped before the full download finishes.
 
 ## Run
 
@@ -67,6 +75,7 @@ https://example.com/{folder}/{file}.mp4 folder=1-100 file=2
 
 - `/start` shows the supported input formats.
 - `/status` shows the global queue status.
+- `/skip` or `/remove_current` removes the item that is currently downloading or uploading.
 
 ## Progress Updates
 
