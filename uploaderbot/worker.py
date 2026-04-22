@@ -4,6 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+import httpx
 from telegram.error import TelegramError
 
 from .config import Config
@@ -85,33 +86,23 @@ class UploadWorker:
                         raise
                     except DownloadTooLargeError as exc:
                         error_message = str(exc)
-                        await asyncio.to_thread(self.store.mark_removed, item_id, error_message)
-                        await asyncio.to_thread(self.store.refresh_state, last_error=error_message)
-                        logger.info(
-                            "Removed oversized file from queue on line %s: %s",
-                            current_item["line_number"],
-                            error_message,
-                        )
+                        await self._remove_failed_item(current_item, item_id, error_message)
+                        continue
+                    except httpx.HTTPStatusError as exc:
+                        error_message = self._format_http_error(exc)
+                        if 400 <= exc.response.status_code < 500 and exc.response.status_code != 429:
+                            await self._remove_failed_item(current_item, item_id, error_message)
+                            continue
+
+                        await self._retry_failed_item(current_item, item_id, error_message)
+                        continue
+                    except httpx.RequestError as exc:
+                        error_message = str(exc)
+                        await self._retry_failed_item(current_item, item_id, error_message)
                         continue
                     except TelegramError as exc:
                         error_message = str(exc)
-                        await asyncio.to_thread(
-                            self.store.mark_pending_after_error,
-                            item_id,
-                            error_message,
-                        )
-                        await asyncio.to_thread(
-                            self.store.refresh_state,
-                            status="waiting_retry",
-                            last_error=error_message,
-                        )
-                        logger.warning(
-                            "Upload failed for line %s, retrying in %s seconds: %s",
-                            current_item["line_number"],
-                            self.config.retry_delay_seconds,
-                            error_message,
-                        )
-                        await asyncio.sleep(self.config.retry_delay_seconds)
+                        await self._retry_failed_item(current_item, item_id, error_message)
                         continue
                     finally:
                         if self._current_item_task is item_task:
@@ -256,3 +247,44 @@ class UploadWorker:
         self._skip_requested_item_ids.add(str(current_item["_id"]))
         current_task.cancel()
         return current_item
+
+    async def _remove_failed_item(
+        self,
+        current_item: dict[str, object],
+        item_id: str,
+        error_message: str,
+    ) -> None:
+        await asyncio.to_thread(self.store.mark_removed, item_id, error_message)
+        await asyncio.to_thread(self.store.refresh_state, last_error=error_message)
+        logger.info(
+            "Removed failed item from queue on line %s: %s",
+            current_item["line_number"],
+            error_message,
+        )
+
+    async def _retry_failed_item(
+        self,
+        current_item: dict[str, object],
+        item_id: str,
+        error_message: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self.store.mark_pending_after_error,
+            item_id,
+            error_message,
+        )
+        await asyncio.to_thread(
+            self.store.refresh_state,
+            status="waiting_retry",
+            last_error=error_message,
+        )
+        logger.warning(
+            "Upload failed for line %s, retrying in %s seconds: %s",
+            current_item["line_number"],
+            self.config.retry_delay_seconds,
+            error_message,
+        )
+        await asyncio.sleep(self.config.retry_delay_seconds)
+
+    def _format_http_error(self, exc: httpx.HTTPStatusError) -> str:
+        return f"HTTP {exc.response.status_code} for {exc.request.url}"
