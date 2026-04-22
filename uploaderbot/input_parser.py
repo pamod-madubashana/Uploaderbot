@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 
 RANGE_INPUT_PATTERN = re.compile(r"^(?P<url>\S+)\s+(?P<start>\d+)\s*-\s*(?P<end>\d+)$")
 URL_TOKEN_PATTERN = re.compile(r"(?:(?:https?://)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:/[^\s]*)?)")
-PLACEHOLDER_PATTERN = re.compile(r"\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)\}")
+PLACEHOLDER_PATTERN = re.compile(
+    r"\{(?P<expression>[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?)\}"
+)
 ASSIGNMENT_PATTERN = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<start>\d+)(?:-(?P<end>\d+))?$")
 NUMBER_PATTERN = re.compile(r"\d+")
 TRIMMABLE_URL_CHARS = "<>()[]{}\"'.,;:!?"
 DEFAULT_PLACEHOLDER_NAMES = {"n", "num", "number"}
+SUPPORTED_DERIVED_PLACEHOLDERS = {"block1000"}
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceholderSpec:
+    raw_expression: str
+    source_name: str
+    transform: str | None = None
 
 
 class QueueInputError(ValueError):
@@ -78,15 +89,18 @@ def expand_url_pattern(url: str, start: int, end: int) -> list[str]:
     if end < start:
         raise QueueInputError("Range end must be greater than or equal to range start")
 
-    placeholders = PLACEHOLDER_PATTERN.findall(url)
+    placeholders = _extract_placeholder_specs(url)
     if placeholders:
-        unsupported = set(placeholders) - DEFAULT_PLACEHOLDER_NAMES
+        unsupported = {placeholder.source_name for placeholder in placeholders} - DEFAULT_PLACEHOLDER_NAMES
         if unsupported:
             names = ", ".join(sorted(unsupported))
             raise QueueInputError(
                 f"Placeholder(s) {names} need explicit assignments like {names}=1-100"
             )
-        return [PLACEHOLDER_PATTERN.sub(str(number), url) for number in range(start, end + 1)]
+        return [
+            _render_placeholder_url(url, {placeholder.source_name: number for placeholder in placeholders})
+            for number in range(start, end + 1)
+        ]
 
     replace_start, replace_end, width, zero_fill = _locate_number_to_replace(url)
     expanded_urls: list[str] = []
@@ -102,9 +116,11 @@ def expand_placeholder_assignments(
     url: str,
     assignments: dict[str, tuple[int, int]],
 ) -> list[str]:
-    placeholder_names = set(PLACEHOLDER_PATTERN.findall(url))
-    if not placeholder_names:
+    placeholders = _extract_placeholder_specs(url)
+    if not placeholders:
         raise QueueInputError("Assignments can only be used with placeholders like {part}")
+
+    placeholder_names = {placeholder.source_name for placeholder in placeholders}
 
     missing = placeholder_names - set(assignments)
     if missing:
@@ -139,10 +155,38 @@ def expand_placeholder_assignments(
 
 def _render_placeholder_url(url: str, values: dict[str, int]) -> str:
     def replacer(match: re.Match[str]) -> str:
-        name = match.group("name")
-        return str(values[name])
+        placeholder = _parse_placeholder_expression(match.group("expression"))
+        return str(_resolve_placeholder_value(placeholder, values))
 
     return PLACEHOLDER_PATTERN.sub(replacer, url)
+
+
+def _extract_placeholder_specs(url: str) -> list[PlaceholderSpec]:
+    return [_parse_placeholder_expression(match.group("expression")) for match in PLACEHOLDER_PATTERN.finditer(url)]
+
+
+def _parse_placeholder_expression(expression: str) -> PlaceholderSpec:
+    transform, separator, source_name = expression.partition(":")
+    if not separator:
+        return PlaceholderSpec(raw_expression=expression, source_name=expression)
+
+    if transform not in SUPPORTED_DERIVED_PLACEHOLDERS:
+        raise QueueInputError(f"Unsupported placeholder transform: {transform}")
+
+    return PlaceholderSpec(
+        raw_expression=expression,
+        source_name=source_name,
+        transform=transform,
+    )
+
+
+def _resolve_placeholder_value(placeholder: PlaceholderSpec, values: dict[str, int]) -> int:
+    value = values[placeholder.source_name]
+    if placeholder.transform is None:
+        return value
+    if placeholder.transform == "block1000":
+        return (value // 1000) * 1000
+    raise QueueInputError(f"Unsupported placeholder transform: {placeholder.transform}")
 
 
 def _parse_assignments(parts: list[str]) -> dict[str, tuple[int, int]]:
