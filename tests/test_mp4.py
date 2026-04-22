@@ -65,6 +65,39 @@ class Mp4Tests(unittest.TestCase):
             assert thumbnail_path is not None
             self.assertTrue(thumbnail_path.exists())
 
+    def test_prepare_video_file_retries_until_thumbnail_fits_size_limit(self) -> None:
+        blob = build_sample_mp4(moov_after_mdat=True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.mp4"
+            path.write_bytes(blob)
+            quality_values: list[str] = []
+
+            def fake_run(command, capture_output, text, check):
+                thumbnail_path = Path(command[-1])
+                quality_values.append(command[command.index("-q:v") + 1])
+                if len(quality_values) == 1:
+                    thumbnail_path.write_bytes(b"x" * 210_000)
+                else:
+                    thumbnail_path.write_bytes(b"jpeg")
+
+                class Result:
+                    returncode = 0
+                    stderr = ""
+                    stdout = ""
+
+                return Result()
+
+            with patch("uploaderbot.mp4.resolve_ffmpeg_executable", return_value="ffmpeg"):
+                with patch("uploaderbot.mp4.subprocess.run", side_effect=fake_run):
+                    attributes = prepare_video_file(path)
+
+            self.assertEqual(quality_values[:2], ["4", "8"])
+            thumbnail_path = attributes.thumbnail_path
+            self.assertIsNotNone(thumbnail_path)
+            assert thumbnail_path is not None
+            self.assertLessEqual(thumbnail_path.stat().st_size, 200 * 1024)
+
 
 def build_sample_mp4(*, moov_after_mdat: bool) -> bytes:
     ftyp = box("ftyp", b"isom" + (0).to_bytes(4, "big") + b"isom")

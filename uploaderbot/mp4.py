@@ -21,6 +21,8 @@ CONTAINER_BOX_TYPES = {
     "udta",
 }
 THUMBNAIL_SUFFIX = ".telegram-thumb.jpg"
+THUMBNAIL_MAX_BYTES = 200 * 1024
+THUMBNAIL_QUALITY_STEPS = (4, 8, 12, 18, 24)
 
 
 logger = logging.getLogger("uploaderbot")
@@ -163,30 +165,48 @@ def build_video_thumbnail(path: Path, duration_seconds: int | None) -> Path | No
         return None
 
     thumbnail_path = path.with_name(f"{path.stem}{THUMBNAIL_SUFFIX}")
-    thumbnail_path.unlink(missing_ok=True)
     timestamp_seconds = thumbnail_timestamp_seconds(duration_seconds)
-    command = [
-        ffmpeg_executable,
-        "-y",
-        "-ss",
-        f"{timestamp_seconds:.3f}",
-        "-i",
-        str(path),
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale=min(320\\,iw):-2",
-        "-q:v",
-        "2",
-        str(thumbnail_path),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0 or not thumbnail_path.exists() or thumbnail_path.stat().st_size == 0:
+    last_error = "unknown ffmpeg error"
+
+    for quality in THUMBNAIL_QUALITY_STEPS:
         thumbnail_path.unlink(missing_ok=True)
-        stderr_text = result.stderr.strip() or result.stdout.strip() or "unknown ffmpeg error"
-        logger.warning("Could not create thumbnail for %s: %s", path, stderr_text)
-        return None
-    return thumbnail_path
+        command = [
+            ffmpeg_executable,
+            "-y",
+            "-ss",
+            f"{timestamp_seconds:.3f}",
+            "-i",
+            str(path),
+            "-frames:v",
+            "1",
+            "-an",
+            "-sn",
+            "-dn",
+            "-map_metadata",
+            "-1",
+            "-vf",
+            "scale=320:320:force_original_aspect_ratio=decrease",
+            "-pix_fmt",
+            "yuvj420p",
+            "-q:v",
+            str(quality),
+            str(thumbnail_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            last_error = result.stderr.strip() or result.stdout.strip() or "unknown ffmpeg error"
+            continue
+
+        if not thumbnail_path.exists() or thumbnail_path.stat().st_size == 0:
+            last_error = "ffmpeg did not create a thumbnail file"
+            continue
+
+        if thumbnail_path.stat().st_size <= THUMBNAIL_MAX_BYTES:
+            return thumbnail_path
+
+    thumbnail_path.unlink(missing_ok=True)
+    logger.warning("Could not create thumbnail for %s: %s", path, last_error)
+    return None
 
 
 def resolve_ffmpeg_executable() -> str | None:
