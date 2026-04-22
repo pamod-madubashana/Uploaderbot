@@ -15,7 +15,7 @@ ASSIGNMENT_PATTERN = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<start>\d
 NUMBER_PATTERN = re.compile(r"\d+")
 TRIMMABLE_URL_CHARS = "<>()[]{}\"'.,;:!?"
 DEFAULT_PLACEHOLDER_NAMES = {"n", "num", "number"}
-SUPPORTED_DERIVED_PLACEHOLDERS = {"block1000"}
+SUPPORTED_DERIVED_PLACEHOLDERS = {"block1000", "index1000"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +186,8 @@ def _resolve_placeholder_value(placeholder: PlaceholderSpec, values: dict[str, i
         return value
     if placeholder.transform == "block1000":
         return (value // 1000) * 1000
+    if placeholder.transform == "index1000":
+        return ((value - 1) % 1000) + 1
     raise QueueInputError(f"Unsupported placeholder transform: {placeholder.transform}")
 
 
