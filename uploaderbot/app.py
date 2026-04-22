@@ -38,8 +38,7 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("skip", skip_command))
-    application.add_handler(CommandHandler("cancel", skip_command))
+    application.add_handler(CommandHandler(["skip", "remove_current", "cancel"], skip_command))
     application.add_handler(MessageHandler(filters.Document.TEXT, text_file_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     return application

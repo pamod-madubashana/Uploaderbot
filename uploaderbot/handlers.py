@@ -26,7 +26,7 @@ def build_help_text() -> str:
         "❓ /help - show all available commands\n"
         "📊 /status - show current queue progress\n"
         "⏭️ /skip - remove the current item\n"
-        "⏭️ /remove_current - same as /skip"
+        "♻️ /remove_current, /cancel - aliases for /skip"
     )
 
 
