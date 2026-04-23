@@ -1,6 +1,6 @@
 # Telegram Uploader Bot
 
-This bot accepts links directly from Telegram messages, downloads the media, and uploads it to your target chat.
+This bot accepts links directly from Telegram messages, downloads the media, and uploads it to one or more target chats.
 
 ## Features
 
@@ -8,6 +8,7 @@ This bot accepts links directly from Telegram messages, downloads the media, and
 - Send a UTF-8 text file and the bot queues every supported link inside it.
 - Send link patterns and expand them into many URLs.
 - Get a reply on the source message with a progress bar that refreshes every 10 seconds.
+- Upload each queued item to every configured target chat.
 - Works with MongoDB when available and falls back to SQLite automatically.
 
 ## Setup
@@ -22,7 +23,7 @@ Use this template:
 
 ```env
 TOKEN=your_bot_token
-CHAT_ID=-1001234567890
+CHAT_IDs=-1001234567890,-1009876543210
 DATABASE=mongodb://localhost:27017
 DATABASE_NAME=telegram_uploader
 DOWNLOAD_DIR=downloads
@@ -35,6 +36,7 @@ Notes:
 
 - To force SQLite only, set `DATABASE=sqlite:///upload_state.db`.
 - If `DATABASE` points to MongoDB and the connection fails, the bot uses SQLite automatically.
+- `CHAT_IDs` accepts one or more comma-separated Telegram chat IDs.
 - Files larger than `MAX_DOWNLOAD_SIZE_MB` are skipped before the full download finishes.
 
 ## Run

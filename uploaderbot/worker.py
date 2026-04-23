@@ -187,51 +187,96 @@ class UploadWorker:
             format_bytes(downloaded_file.size_bytes),
         )
 
-        if media_type == "video":
-            message = await self.bot.send_video(
-                chat_id=self.config.chat_id,
-                video=downloaded_file.path,
-                filename=downloaded_file.filename,
-                caption=caption,
-                duration=video_attributes.duration_seconds,
-                width=video_attributes.width,
-                height=video_attributes.height,
-                thumbnail=video_attributes.thumbnail_path,
-                cover=video_attributes.thumbnail_path,
-                supports_streaming=video_attributes.supports_streaming,
+        primary_chat_id = self.config.chat_ids[0]
+        sent_messages: list[tuple[int, int]] = []
+
+        try:
+            if media_type == "video":
+                message = await self.bot.send_video(
+                    chat_id=primary_chat_id,
+                    video=downloaded_file.path,
+                    filename=downloaded_file.filename,
+                    caption=caption,
+                    duration=video_attributes.duration_seconds,
+                    width=video_attributes.width,
+                    height=video_attributes.height,
+                    thumbnail=video_attributes.thumbnail_path,
+                    cover=video_attributes.thumbnail_path,
+                    supports_streaming=video_attributes.supports_streaming,
+                    read_timeout=600,
+                    write_timeout=600,
+                    connect_timeout=60,
+                    pool_timeout=60,
+                )
+                logger.info("Telegram upload finished as video: %s", downloaded_file.path)
+                media_label = "video"
+            elif media_type == "photo":
+                message = await self.bot.send_photo(
+                    chat_id=primary_chat_id,
+                    photo=downloaded_file.path,
+                    caption=caption,
+                    read_timeout=600,
+                    write_timeout=600,
+                    connect_timeout=60,
+                    pool_timeout=60,
+                )
+                logger.info("Telegram upload finished as photo: %s", downloaded_file.path)
+                media_label = "photo"
+            else:
+                message = await self.bot.send_document(
+                    chat_id=primary_chat_id,
+                    document=downloaded_file.path,
+                    filename=downloaded_file.filename,
+                    caption=caption,
+                    read_timeout=600,
+                    write_timeout=600,
+                    connect_timeout=60,
+                    pool_timeout=60,
+                )
+                logger.info("Telegram upload finished as document: %s", downloaded_file.path)
+                media_label = "document"
+
+            sent_messages.append((primary_chat_id, int(message.message_id)))
+            await self._fan_out_message_to_additional_chats(
+                source_chat_id=primary_chat_id,
+                source_message_id=int(message.message_id),
+                sent_messages=sent_messages,
+            )
+            return message, media_label
+        except TelegramError:
+            await self._delete_sent_messages(sent_messages)
+            raise
+
+    async def _fan_out_message_to_additional_chats(
+        self,
+        *,
+        source_chat_id: int,
+        source_message_id: int,
+        sent_messages: list[tuple[int, int]],
+    ) -> None:
+        for chat_id in self.config.chat_ids[1:]:
+            copied_message = await self.bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=source_chat_id,
+                message_id=source_message_id,
                 read_timeout=600,
                 write_timeout=600,
                 connect_timeout=60,
                 pool_timeout=60,
             )
-            logger.info("Telegram upload finished as video: %s", downloaded_file.path)
-            return message, "video"
+            sent_messages.append((chat_id, int(copied_message.message_id)))
 
-        if media_type == "photo":
-            message = await self.bot.send_photo(
-                chat_id=self.config.chat_id,
-                photo=downloaded_file.path,
-                caption=caption,
-                read_timeout=600,
-                write_timeout=600,
-                connect_timeout=60,
-                pool_timeout=60,
-            )
-            logger.info("Telegram upload finished as photo: %s", downloaded_file.path)
-            return message, "photo"
-
-        message = await self.bot.send_document(
-            chat_id=self.config.chat_id,
-            document=downloaded_file.path,
-            filename=downloaded_file.filename,
-            caption=caption,
-            read_timeout=600,
-            write_timeout=600,
-            connect_timeout=60,
-            pool_timeout=60,
-        )
-        logger.info("Telegram upload finished as document: %s", downloaded_file.path)
-        return message, "document"
+    async def _delete_sent_messages(self, sent_messages: list[tuple[int, int]]) -> None:
+        for chat_id, message_id in reversed(sent_messages):
+            try:
+                await self.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except TelegramError as exc:
+                logger.warning(
+                    "Could not clean up sent Telegram message %s in chat %s: %s",
+                    message_id,
+                    chat_id,
+                    exc,
+                )
 
     async def _delete_downloaded_file(self, path: Path) -> None:
         logger.info("Deleting local file: %s", path)

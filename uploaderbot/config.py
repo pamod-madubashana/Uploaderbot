@@ -25,12 +25,28 @@ def require_env(name: str) -> str:
     return value
 
 
+def parse_chat_ids(value: str) -> list[int]:
+    chat_ids: list[int] = []
+    for raw_part in value.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        try:
+            chat_ids.append(int(part))
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid chat id in CHAT_IDs: {part}") from exc
+
+    if not chat_ids:
+        raise RuntimeError("CHAT_IDs must include at least one chat id")
+    return chat_ids
+
+
 @dataclass(slots=True)
 class Config:
     token: str
     database_uri: str
     database_name: str
-    chat_id: int
+    chat_ids: list[int]
     queue_file: Path
     download_dir: Path
     max_download_size_bytes: int
@@ -41,7 +57,10 @@ class Config:
     def from_env(cls, base_dir: Path) -> "Config":
         token = require_env("TOKEN")
         database_uri = require_env("DATABASE")
-        chat_id = int(require_env("CHAT_ID"))
+        raw_chat_ids = os.getenv("CHAT_IDs") or os.getenv("CHAT_IDS") or os.getenv("CHAT_ID")
+        if not raw_chat_ids:
+            raise RuntimeError("Missing required environment variable: CHAT_IDs")
+        chat_ids = parse_chat_ids(raw_chat_ids)
         database_name = os.getenv("DATABASE_NAME", "telegram_uploader")
         queue_file = base_dir / os.getenv("QUEUE_FILE", "vvv.txt")
         download_dir = base_dir / os.getenv("DOWNLOAD_DIR", "downloads")
@@ -58,7 +77,7 @@ class Config:
             token=token,
             database_uri=database_uri,
             database_name=database_name,
-            chat_id=chat_id,
+            chat_ids=chat_ids,
             queue_file=queue_file,
             download_dir=download_dir,
             max_download_size_bytes=max_download_size_mb * 1024 * 1024,
