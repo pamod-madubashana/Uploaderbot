@@ -61,6 +61,7 @@ https://example.com/{n}/2.mp4 1-100
 https://example.com/{n}/{n}.mp4 1-100
 https://example.com/{block1000:n}/{n}/{n}.mp4 2000-129000
 https://example.com/{block1000:n}/{index1000:n}/{index1000:n}.mp4 1-129000
+https://example.com/{block1000:n}/{offset1000:n}/{offset1000:n}.mp4 1-129000
 https://example.com/{folder}/{file}.mp4 folder=1-100 file=2
 ```
 
@@ -78,6 +79,7 @@ https://example.com/episode1.mp4
 https://example.com/{n}/2.mp4 1-100
 https://example.com/{block1000:n}/{n}/{n}.mp4 2000-129000
 https://example.com/{block1000:n}/{index1000:n}/{index1000:n}.mp4 1-129000
+https://example.com/{block1000:n}/{offset1000:n}/{offset1000:n}.mp4 1-129000
 https://example.com/{folder}/{file}.mp4 folder=1-100 file=2
 ```
 
