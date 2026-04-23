@@ -38,6 +38,7 @@ Notes:
 - If `DATABASE` points to MongoDB and the connection fails, the bot uses SQLite automatically.
 - `CHAT_IDs` accepts one or more comma-separated Telegram chat IDs.
 - Files larger than `MAX_DOWNLOAD_SIZE_MB` are skipped before the full download finishes.
+- The bot keeps a small safety margin under Telegram's 50 MB upload limit, so near-limit files are skipped instead of failing during upload.
 
 ## Run
 

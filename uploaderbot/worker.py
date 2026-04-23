@@ -201,7 +201,6 @@ class UploadWorker:
                     width=video_attributes.width,
                     height=video_attributes.height,
                     thumbnail=video_attributes.thumbnail_path,
-                    cover=video_attributes.thumbnail_path,
                     supports_streaming=video_attributes.supports_streaming,
                     read_timeout=600,
                     write_timeout=600,
