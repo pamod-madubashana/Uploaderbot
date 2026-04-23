@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+TELEGRAM_BOT_UPLOAD_LIMIT_BYTES = 50_000_000
+TELEGRAM_UPLOAD_SAFETY_MARGIN_BYTES = 500_000
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
@@ -39,6 +43,12 @@ def parse_chat_ids(value: str) -> list[int]:
     if not chat_ids:
         raise RuntimeError("CHAT_IDs must include at least one chat id")
     return chat_ids
+
+
+def resolve_max_download_size_bytes(max_download_size_mb: int) -> int:
+    configured_limit = max_download_size_mb * 1024 * 1024
+    telegram_safe_limit = TELEGRAM_BOT_UPLOAD_LIMIT_BYTES - TELEGRAM_UPLOAD_SAFETY_MARGIN_BYTES
+    return min(configured_limit, telegram_safe_limit)
 
 
 @dataclass(slots=True)
@@ -80,7 +90,7 @@ class Config:
             chat_ids=chat_ids,
             queue_file=queue_file,
             download_dir=download_dir,
-            max_download_size_bytes=max_download_size_mb * 1024 * 1024,
+            max_download_size_bytes=resolve_max_download_size_bytes(max_download_size_mb),
             retry_delay_seconds=retry_delay_seconds,
             sqlite_db_file=sqlite_db_file,
         )
