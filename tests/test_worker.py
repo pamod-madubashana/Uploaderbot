@@ -4,11 +4,14 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from uploaderbot.config import Config
+from uploaderbot.downloader import DownloadedFile
+from uploaderbot.mp4 import VideoAttributes
 from uploaderbot.store import SQLiteUploadStore
 from uploaderbot.worker import UploadWorker
 
@@ -64,13 +67,63 @@ class UploadWorkerTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 store.close()
 
+    async def test_upload_copies_item_to_all_configured_chats(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            config = build_config(base_dir, chat_ids=[111, 222, 333])
+            store = SQLiteUploadStore(config)
+            bot = SimpleNamespace(
+                send_video=AsyncMock(return_value=SimpleNamespace(message_id=9001)),
+                send_photo=AsyncMock(),
+                send_document=AsyncMock(),
+                copy_message=AsyncMock(
+                    side_effect=[
+                        SimpleNamespace(message_id=9002),
+                        SimpleNamespace(message_id=9003),
+                    ]
+                ),
+                delete_message=AsyncMock(),
+            )
+            worker = UploadWorker(bot, store, config)
+            downloaded_file = DownloadedFile(
+                path=base_dir / "video.mp4",
+                filename="video.mp4",
+                size_bytes=1024,
+            )
+            video_attributes = VideoAttributes(
+                duration_seconds=12,
+                width=320,
+                height=180,
+                thumbnail_path=None,
+                supports_streaming=True,
+            )
 
-def build_config(base_dir: Path) -> Config:
+            try:
+                message, media_label = await worker._upload_downloaded_file(
+                    downloaded_file,
+                    "video",
+                    "video.mp4",
+                    video_attributes=video_attributes,
+                )
+
+                self.assertEqual(media_label, "video")
+                self.assertEqual(message.message_id, 9001)
+                bot.send_video.assert_awaited_once()
+                self.assertEqual(bot.send_video.await_args.kwargs["chat_id"], 111)
+                self.assertEqual(bot.copy_message.await_count, 2)
+                self.assertEqual(bot.copy_message.await_args_list[0].kwargs["chat_id"], 222)
+                self.assertEqual(bot.copy_message.await_args_list[1].kwargs["chat_id"], 333)
+                bot.delete_message.assert_not_called()
+            finally:
+                store.close()
+
+
+def build_config(base_dir: Path, *, chat_ids: list[int] | None = None) -> Config:
     return Config(
         token="token",
         database_uri=f"sqlite:///{base_dir / 'state.db'}",
         database_name="telegram_uploader",
-        chat_id=123456,
+        chat_ids=chat_ids or [123456],
         queue_file=base_dir / "unused.txt",
         download_dir=base_dir / "downloads",
         max_download_size_bytes=50 * 1024 * 1024,

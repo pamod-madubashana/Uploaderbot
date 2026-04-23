@@ -222,7 +222,7 @@ def build_config(base_dir: Path, *, database_uri: str) -> Config:
         token="token",
         database_uri=database_uri,
         database_name="telegram_uploader",
-        chat_id=123456,
+        chat_ids=[123456],
         queue_file=base_dir / "unused.txt",
         download_dir=base_dir / "downloads",
         max_download_size_bytes=50 * 1024 * 1024,

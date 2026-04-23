@@ -29,7 +29,7 @@ This file gives coding agents a practical guide for working in this repository.
 - Start from `.env.sample` when setting up a new environment.
 - Important env vars:
   - `TOKEN`
-  - `CHAT_ID`
+  - `CHAT_IDs`
   - `DATABASE`
 - Common optional env vars:
   - `DATABASE_NAME`
@@ -206,3 +206,4 @@ python -m unittest tests.test_worker.UploadWorkerTests.test_worker_removes_404_i
 - Check parser tests before extending placeholder syntax.
 - Keep README and `.env.sample` in sync when config or command behavior changes.
 - If you change progress-message behavior, think about startup restore, cleanup, and duplicate watchers.
+- `CHAT_IDs` accepts comma-separated Telegram destination chat IDs.
