@@ -1,43 +1,46 @@
 # AGENTS.md
 
-This file gives coding agents a compact operating guide for this repository.
+This file gives coding agents a practical guide for working in this repository.
 
-## Project Overview
+## Project Summary
 
-- Project type: async Python Telegram bot.
-- Main purpose: accept media source links, queue downloads, upload media to Telegram, and track queue state.
-- Runtime stack: `python-telegram-bot`, `httpx`, `pymongo`, SQLite fallback.
-- Package root: `uploaderbot/`.
-- Default launcher in the repo root: `__main__.py`.
-- Core modules:
-  - `uploaderbot/app.py` builds the Telegram application.
-  - `uploaderbot/handlers.py` handles Telegram commands, text messages, text-file submissions, and progress updates.
-  - `uploaderbot/worker.py` runs the upload loop.
-  - `uploaderbot/store.py` provides MongoDB and SQLite queue/state backends.
-  - `uploaderbot/input_parser.py` parses single links, text-file lines, and URL patterns.
-  - `uploaderbot/downloader.py` streams remote files to disk.
-  - `uploaderbot/media.py` holds URL/media helpers.
+- Project type: async Python Telegram uploader bot.
+- Main job: accept links or text files from Telegram, queue downloads, upload media, and track progress.
+- Main package: `uploaderbot/`.
+- Entry point: `__main__.py`.
+- Helper launcher: `run.sh`.
+- Storage: MongoDB when available, SQLite fallback otherwise.
 
-## Environment And Startup
+## Key Modules
 
-- Required env vars are loaded from `.env` by `uploaderbot/config.py`.
+- `uploaderbot/app.py` wires the Telegram application and handlers.
+- `uploaderbot/handlers.py` handles commands, text submissions, progress messages, and startup/shutdown hooks.
+- `uploaderbot/worker.py` runs the upload loop and retry/cancel logic.
+- `uploaderbot/store.py` implements MongoDB and SQLite queue/state storage.
+- `uploaderbot/input_parser.py` parses raw links and URL patterns.
+- `uploaderbot/downloader.py` downloads source files and enforces the size cap.
+- `uploaderbot/mp4.py` prepares MP4 metadata, streaming layout, and thumbnails.
+- `uploaderbot/media.py` contains media and time helpers.
+- `tests/` holds the unit test suite.
+
+## Environment
+
+- Config is loaded from `.env` via `uploaderbot/config.py`.
+- Start from `.env.sample` when setting up a new environment.
 - Important env vars:
   - `TOKEN`
   - `CHAT_ID`
   - `DATABASE`
-- Optional env vars:
+- Common optional env vars:
   - `DATABASE_NAME`
   - `DOWNLOAD_DIR`
   - `MAX_DOWNLOAD_SIZE_MB`
   - `RETRY_DELAY_SECONDS`
   - `SQLITE_DB_FILE`
-- MongoDB is preferred when `DATABASE` points to Mongo, but the app falls back to SQLite if Mongo connection fails.
-- To force SQLite, use `DATABASE=sqlite:///upload_state.db`.
 
 ## Build / Check / Test Commands
 
-- There is no separate build pipeline or lint config checked into this repo.
-- The closest build/sanity step is Python bytecode compilation.
+There is no dedicated lint or build tool configured in the repo. The normal safety checks are tests plus bytecode compilation.
 
 ### Install dependencies
 
@@ -45,21 +48,27 @@ This file gives coding agents a compact operating guide for this repository.
 python -m pip install -r requirements.txt
 ```
 
-### Run the bot locally
+### Run the bot
 
 ```bash
 python __main__.py
 ```
 
-If the repo still contains `bot.py` in the branch you are working on, `python bot.py` is functionally equivalent.
+### Run with helper script
 
-### Compile all Python files
+```bash
+bash run.sh
+```
+
+`run.sh` pulls the latest fast-forward changes, ensures `.venv` exists, installs missing requirements, and starts the bot.
+
+### Compile all source files
 
 ```bash
 python -m compileall uploaderbot tests
 ```
 
-### Run the full test suite
+### Run all tests
 
 ```bash
 python -m unittest discover -s tests
@@ -70,6 +79,9 @@ python -m unittest discover -s tests
 ```bash
 python -m unittest tests.test_input_parser
 python -m unittest tests.test_store
+python -m unittest tests.test_worker
+python -m unittest tests.test_mp4
+python -m unittest tests.test_handlers
 ```
 
 ### Run a single test class
@@ -77,128 +89,120 @@ python -m unittest tests.test_store
 ```bash
 python -m unittest tests.test_input_parser.ParseQueueTextTests
 python -m unittest tests.test_store.StoreTests
+python -m unittest tests.test_worker.UploadWorkerTests
 ```
 
 ### Run a single test method
 
 ```bash
-python -m unittest tests.test_input_parser.ParseQueueTextTests.test_expands_shared_placeholder_range
-python -m unittest tests.test_store.StoreTests.test_create_store_falls_back_when_mongo_fails
+python -m unittest tests.test_input_parser.ParseQueueTextTests.test_expands_block1000_placeholder_from_range
+python -m unittest tests.test_store.StoreTests.test_enqueue_urls_inserts_new_items_before_existing_pending_items
+python -m unittest tests.test_worker.UploadWorkerTests.test_worker_removes_404_item_without_crashing
 ```
 
-## What To Verify After Code Changes
+## What To Verify After Changes
 
-- For parser or store logic changes: run `python -m unittest discover -s tests`.
-- For handler/worker changes: run tests and `python -m compileall uploaderbot tests`.
-- For application wiring changes: ensure imports still resolve and handlers still register in `uploaderbot/app.py`.
-- For queue/state changes: verify both MongoDB and SQLite code paths remain valid.
-- For Telegram progress-message changes: make sure the update loop still tolerates `message is not modified` errors.
-- For download-limit changes: verify oversized files are skipped cleanly and the worker continues with the next item.
+- Parser changes: run `python -m unittest tests.test_input_parser`.
+- Store changes: run `python -m unittest tests.test_store`.
+- Worker/download changes: run `python -m unittest tests.test_worker` and full suite if behavior crosses modules.
+- MP4/thumbnail changes: run `python -m unittest tests.test_mp4`.
+- Handler/progress-message changes: run `python -m unittest tests.test_handlers` and compileall.
+- Any non-trivial change: run the full test suite and `python -m compileall uploaderbot tests`.
 
-## Code Style Guidelines
+## Code Style
 
-### Python Version / General Style
+### General
 
-- Follow the existing Python 3.11+ style already used in the repo.
-- Keep code simple and explicit; this codebase favors readability over clever abstractions.
-- Prefer ASCII when editing unless the file already relies on Unicode characters intentionally.
-- Use concise helper functions for repeated formatting/parsing logic.
+- Follow existing Python 3.11+ style.
+- Prefer clear, small, direct changes over broad refactors.
+- Keep code explicit; avoid clever one-liners when they hurt readability.
+- Prefer ASCII unless the file already uses Unicode intentionally.
 
 ### Imports
 
-- Keep `from __future__ import annotations` at the top of Python modules that already use it.
+- Keep `from __future__ import annotations` where already used.
 - Group imports in this order:
   1. standard library
   2. third-party packages
-  3. local `uploaderbot` imports
-- Separate groups with a single blank line.
-- Import only what is used.
-- Prefer direct imports over wildcard imports.
+  3. local imports
+- Separate import groups with one blank line.
+- Remove unused imports.
+- Do not use wildcard imports.
 
 ### Formatting
 
-- Follow the repository’s current formatting style, which is close to Black defaults even though Black is not configured.
 - Use 4-space indentation.
-- Keep line length reasonable; wrap long calls with hanging indents as seen in `handlers.py` and `store.py`.
-- Use trailing commas in multiline literals/calls when it improves diff quality.
-- Preserve one blank line between top-level definitions.
+- Match the current style, which is close to Black formatting.
+- Keep lines reasonably short; wrap long calls with hanging indents.
+- Use trailing commas in multiline calls/literals when it improves diffs.
+- Keep one blank line between top-level defs.
 
 ### Types
 
-- Add type hints for new functions, methods, and important locals.
-- Use built-in generics like `list[str]`, `dict[str, Any]`, and `tuple[int, int]`.
-- Use `Protocol` when defining backend contracts across multiple implementations.
-- Use `object` rather than `Any` when a value is intentionally opaque.
-- Prefer explicit return types on public helpers and class methods.
+- Add type hints for new public functions, methods, and important helpers.
+- Prefer built-in generics such as `list[str]` and `dict[str, Any]`.
+- Use `Protocol` for shared backend contracts.
+- Use `object` instead of `Any` when a value is intentionally opaque.
 
 ### Naming
 
-- Use `snake_case` for functions, methods, variables, and module-level helpers.
-- Use `CamelCase` for classes.
-- Use `UPPER_SNAKE_CASE` for module constants.
-- Choose names that match the queue/upload domain: `enqueue_urls`, `get_batch_progress`, `mark_uploaded`, etc.
-- Keep handler names action-oriented: `text_message`, `text_file_message`, `status_command`.
+- `snake_case` for functions, methods, variables, and modules.
+- `CamelCase` for classes.
+- `UPPER_SNAKE_CASE` for constants.
+- Use domain-specific names such as `enqueue_urls`, `get_batch_progress`, `cancel_all_items`, and `prepare_video_file`.
 
-### Async And Concurrency
+## Async / Concurrency Guidelines
 
-- Telegram handlers are async; keep network-facing handlers as `async def`.
-- Run blocking DB/file operations through `asyncio.to_thread(...)` as the current code does.
-- Background loops should be resilient and log failures instead of failing silently.
-- When adding background tasks, register done callbacks so exceptions are logged.
-- Be careful not to start duplicate worker/progress tasks.
+- Telegram handlers should stay `async def`.
+- Move blocking file or DB work to `asyncio.to_thread(...)`.
+- Background tasks must log exceptions through done callbacks.
+- Avoid duplicate worker, submission, or progress tasks for the same purpose.
+- Be careful when changing cancellation flow; `/skip` and `/cancel` rely on task cancellation semantics.
 
-### Error Handling
+## Error Handling
 
-- Raise specific, readable exceptions for invalid user input, as in `QueueInputError`.
-- Catch service-boundary exceptions close to the boundary:
-  - `TelegramError` around Telegram API operations
-  - `PyMongoError` around Mongo connection/setup
-  - decode errors around uploaded text files
-- Preserve the current graceful fallback behavior from MongoDB to SQLite.
-- Do not swallow exceptions silently; either log them or convert them to a user-facing Telegram reply.
-- Keep error messages short and actionable for end users.
+- Raise `QueueInputError` for invalid user-supplied patterns.
+- Catch boundary exceptions near the boundary:
+  - `TelegramError` for Telegram API calls
+  - `httpx.HTTPStatusError` and `httpx.RequestError` for downloads
+  - `PyMongoError` for MongoDB setup/fallback
+  - `UnicodeDecodeError` for uploaded text files
+- Keep user-facing error messages concise.
+- Log failures with enough queue/url context to debug them.
+- Preserve MongoDB-to-SQLite fallback behavior.
 
-### Logging
+## Storage Rules
 
-- Use the module logger pattern: `logger = logging.getLogger("uploaderbot")`.
-- Log lifecycle events for queueing, downloading, uploading, retries, and cleanup.
-- Prefer structured log messages with placeholders instead of f-strings in logger calls.
-- Log enough context to debug queue position and source URL, but avoid noisy per-byte logging.
+- Keep MongoDB and SQLite behavior aligned unless intentionally backend-specific.
+- When changing queue logic, update both storage implementations.
+- `line_number` is the queue ordering key.
+- Progress watch persistence now lives in storage too; remember to update both backends.
 
-### Data / Storage Patterns
+## Telegram UX Rules
 
-- Keep MongoDB and SQLite implementations behaviorally aligned.
-- When changing store behavior, update both backends unless the change is intentionally backend-specific.
-- Store records use line numbers as stable queue ordering.
-- State refresh logic should continue to expose counts, current item, next item, and last error.
+- Keep `/start`, `/help`, and `/status` concise and readable.
+- Source submissions should respond immediately, then continue heavy work in background tasks.
+- Progress messages should be editable plain text and tolerate benign "message is not modified" errors.
+- `/status` and source progress messages share the same progress format.
 
-### Telegram UX Conventions
+## Tests
 
-- Reply directly to the user’s source message when acknowledging queued input.
-- Keep `/start` and `/status` responses concise.
-- Keep `/skip` or similar control commands short and explicit about what item was removed.
-- Progress messages should remain readable in plain text.
-- If editing a message repeatedly, tolerate benign “message is not modified” failures.
-
-### Tests
-
-- Add or update unit tests when changing parser rules, store behavior, or fallback logic.
-- Keep tests in `tests/` using `unittest`.
-- Name test files `test_*.py`.
-- Name test methods after the behavior they verify.
-- Prefer focused tests for parser edge cases and backend fallback behavior.
+- Add or update unit tests for parser behavior, store logic, worker retries/cancellation, and MP4 handling.
+- Keep tests focused and behavior-driven.
+- Test file names should stay `test_*.py`.
+- Prefer asserting observable behavior over implementation details.
 
 ## Repo-Specific Rules Files
 
 - No `.cursorrules` file was found.
 - No `.cursor/rules/` directory was found.
 - No `.github/copilot-instructions.md` file was found.
-- If any of these files are added later, update this document to summarize their instructions.
+- If any of those files are added later, update this document to summarize them.
 
-## Practical Agent Advice
+## Practical Advice For Agents
 
-- Before editing store logic, inspect both backend implementations.
-- Before editing handlers, trace how `uploaderbot/app.py` registers them.
-- Before changing queue parsing, review the tests in `tests/test_input_parser.py` and add new cases.
-- Prefer small, targeted edits over broad refactors.
-- Avoid introducing new tooling unless the repository already adopts it.
+- Read both storage backends before editing queue/state behavior.
+- Read handler registration in `uploaderbot/app.py` before changing commands.
+- Check parser tests before extending placeholder syntax.
+- Keep README and `.env.sample` in sync when config or command behavior changes.
+- If you change progress-message behavior, think about startup restore, cleanup, and duplicate watchers.
