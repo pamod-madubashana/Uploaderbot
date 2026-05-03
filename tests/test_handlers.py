@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 
-from uploaderbot.handlers import _format_progress_message, _replace_chat_progress_watch
+from uploaderbot.handlers import BOT_COMMANDS, _format_progress_message, _replace_chat_progress_watch, ensure_bot_commands
 
 
 class FakeStore:
@@ -23,9 +23,38 @@ class FakeStore:
 class FakeBot:
     def __init__(self) -> None:
         self.deleted_messages: list[tuple[int, int]] = []
+        self.commands: list[object] = []
+        self.set_calls = 0
 
     async def delete_message(self, *, chat_id: int, message_id: int) -> None:
         self.deleted_messages.append((chat_id, message_id))
+
+    async def get_my_commands(self) -> list[object]:
+        return list(self.commands)
+
+    async def set_my_commands(self, commands: list[object]) -> None:
+        self.commands = list(commands)
+        self.set_calls += 1
+
+
+class BotCommandStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ensure_bot_commands_sets_defaults_when_missing(self) -> None:
+        bot = FakeBot()
+        application = SimpleNamespace(bot=bot)
+
+        await ensure_bot_commands(cast(Any, application))
+
+        self.assertEqual(bot.set_calls, 1)
+        self.assertEqual(bot.commands, BOT_COMMANDS)
+
+    async def test_ensure_bot_commands_keeps_existing_commands(self) -> None:
+        bot = FakeBot()
+        bot.commands = [object()]
+        application = SimpleNamespace(bot=bot)
+
+        await ensure_bot_commands(cast(Any, application))
+
+        self.assertEqual(bot.set_calls, 0)
 
 
 class ReplaceProgressWatchTests(unittest.IsolatedAsyncioTestCase):

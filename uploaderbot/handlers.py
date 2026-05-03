@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from telegram import Message, Update
+from telegram import BotCommand, Message, Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, ContextTypes
 
@@ -22,6 +22,15 @@ DATABASE_LABELS = {
     "mongo": "MongoDB",
     "sqlite": "SQLite",
 }
+
+BOT_COMMANDS = [
+    BotCommand("start", "show a quick welcome message"),
+    BotCommand("help", "show all available commands"),
+    BotCommand("status", "show current queue progress"),
+    BotCommand("skip", "remove the current item"),
+    BotCommand("remove_current", "alias for /skip"),
+    BotCommand("cancel", "remove all current and queued items"),
+]
 
 
 def build_help_text() -> str:
@@ -525,8 +534,25 @@ def log_background_task(task: asyncio.Task[Any]) -> None:
 async def on_startup(application: Application) -> None:
     application.bot_data.setdefault("progress_tasks", {})
     application.bot_data.setdefault("submission_tasks", {})
+    await ensure_bot_commands(application)
     await restore_progress_tasks(application)
     start_upload_task(application)
+
+
+async def ensure_bot_commands(application: Application) -> None:
+    try:
+        existing_commands = await application.bot.get_my_commands()
+    except TelegramError as exc:
+        logger.warning("Could not read bot commands during startup: %s", exc)
+        return
+
+    if existing_commands:
+        return
+
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+    except TelegramError as exc:
+        logger.warning("Could not set bot commands during startup: %s", exc)
 
 
 async def restore_progress_tasks(application: Application) -> None:
