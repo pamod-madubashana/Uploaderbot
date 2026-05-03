@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+downloads/
+upload_state.db
+tests/__pycache__/
+uploaderbot/__pycache__/
