@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 
-from uploaderbot.handlers import BOT_COMMANDS, _format_progress_message, _replace_chat_progress_watch, ensure_bot_commands
+from uploaderbot.handlers import BOT_COMMANDS, _format_progress_message, _replace_chat_progress_watch, ensure_bot_commands, start_command
 
 
 class FakeStore:
@@ -47,14 +47,36 @@ class BotCommandStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.set_calls, 1)
         self.assertEqual(bot.commands, BOT_COMMANDS)
 
-    async def test_ensure_bot_commands_keeps_existing_commands(self) -> None:
+    async def test_ensure_bot_commands_replaces_existing_commands(self) -> None:
         bot = FakeBot()
         bot.commands = [object()]
         application = SimpleNamespace(bot=bot)
 
         await ensure_bot_commands(cast(Any, application))
 
-        self.assertEqual(bot.set_calls, 0)
+        self.assertEqual(bot.set_calls, 1)
+        self.assertEqual(bot.commands, BOT_COMMANDS)
+
+
+class FakeReplyMessage:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def reply_text(self, text: str, **kwargs: object) -> None:
+        self.calls.append({"text": text, **kwargs})
+
+
+class StartCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_command_uses_plain_text_examples(self) -> None:
+        message = FakeReplyMessage()
+        update = SimpleNamespace(effective_message=message)
+
+        await start_command(cast(Any, update), cast(Any, SimpleNamespace()))
+
+        self.assertEqual(len(message.calls), 1)
+        text = str(message.calls[0]["text"])
+        self.assertIn("/status shows queue progress", text)
+        self.assertNotIn("`", text)
 
 
 class ReplaceProgressWatchTests(unittest.IsolatedAsyncioTestCase):

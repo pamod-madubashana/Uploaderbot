@@ -53,12 +53,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "🎬 Uploader bot is ready.\n\n"
         "📄 Send a text file with links\n"
         "🔗 Send a single direct link\n"
-        "🧩 Send a pattern like `site.com/{n}/2.mp4 1-100`\n"
-        "🔁 Or use `site.com/{n}/{n}.mp4 1-100`\n\n"
-        "📊 `/status` shows queue progress\n"
-        "⏭️ `/skip` removes the current item\n"
-        "🧹 `/cancel` removes all queued items\n"
-        "❓ `/help` shows all commands",
+        "🧩 Send a pattern like site.com/{n}/2.mp4 1-100\n"
+        "🔁 Or use site.com/{n}/{n}.mp4 1-100\n\n"
+        "📊 /status shows queue progress\n"
+        "⏭️ /skip removes the current item\n"
+        "🧹 /cancel removes all queued items\n"
+        "❓ /help shows all commands",
         disable_web_page_preview=True,
     )
 
@@ -561,15 +561,6 @@ async def on_startup(application: Application) -> None:
 
 
 async def ensure_bot_commands(application: Application) -> None:
-    try:
-        existing_commands = await application.bot.get_my_commands()
-    except TelegramError as exc:
-        logger.warning("Could not read bot commands during startup: %s", exc)
-        return
-
-    if existing_commands:
-        return
-
     try:
         await application.bot.set_my_commands(BOT_COMMANDS)
     except TelegramError as exc:
