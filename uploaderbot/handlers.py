@@ -97,14 +97,24 @@ async def text_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_message is None:
+    message = update.effective_message
+    if message is None:
         return
 
     store = context.application.bot_data["store"]
     state = await asyncio.to_thread(store.get_state)
-    await update.effective_message.reply_text(
+    await _replace_chat_progress_watch(context.application, chat_id=message.chat_id)
+    progress_message = await message.reply_text(
         _format_progress_message(source_label="status", queue_state=state),
         disable_web_page_preview=True,
+    )
+    start_progress_task(
+        context.application,
+        chat_id=progress_message.chat_id,
+        message_id=progress_message.message_id,
+        source_label="status",
+        first_line_number=0,
+        last_line_number=0,
     )
 
 
@@ -165,6 +175,12 @@ async def _queue_text_payload(
     state = enqueue_result["state"]
     first_line_number = enqueue_result["first_line_number"]
     last_line_number = enqueue_result["last_line_number"]
+
+    await _replace_chat_progress_watch(
+        application,
+        chat_id=submission_message.chat_id,
+        keep_message_id=submission_message.message_id,
+    )
 
     await _edit_submission_message(
         submission_message,
@@ -323,23 +339,32 @@ async def monitor_batch_progress(
     last_line_number: int,
 ) -> None:
     store = application.bot_data["store"]
+    displayed_updated_at: datetime | None = None
+    is_status_watch = source_label == "status"
 
     while True:
-        batch_progress = await asyncio.to_thread(
-            store.get_batch_progress,
-            first_line_number,
-            last_line_number,
-        )
+        batch_progress: dict[str, Any] | None = None
+        if not is_status_watch:
+            batch_progress = await asyncio.to_thread(
+                store.get_batch_progress,
+                first_line_number,
+                last_line_number,
+            )
         queue_state = await asyncio.to_thread(store.get_state)
-        text = _format_progress_message(source_label=source_label, queue_state=queue_state)
+        text = _format_progress_message(
+            source_label=source_label,
+            queue_state=queue_state,
+            updated_at=displayed_updated_at,
+        )
 
         try:
-            await application.bot.edit_message_text(
+            updated_message = await application.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=text,
                 disable_web_page_preview=True,
             )
+            displayed_updated_at = _resolve_message_updated_at(updated_message)
         except BadRequest as exc:
             if "message is not modified" not in str(exc).lower():
                 await asyncio.to_thread(store.delete_progress_watch, message_id)
@@ -349,6 +374,11 @@ async def monitor_batch_progress(
             logger.warning("Could not update progress message %s: %s", message_id, exc)
             return
 
+        if is_status_watch:
+            await asyncio.sleep(PROGRESS_UPDATE_SECONDS)
+            continue
+
+        assert batch_progress is not None
         if batch_progress.get("total_count", 0) == 0 or batch_progress.get("uploaded_count") == batch_progress.get("total_count"):
             await asyncio.to_thread(store.delete_progress_watch, message_id)
             return
@@ -356,7 +386,47 @@ async def monitor_batch_progress(
         await asyncio.sleep(PROGRESS_UPDATE_SECONDS)
 
 
-def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) -> str:
+async def _replace_chat_progress_watch(
+    application: Application,
+    *,
+    chat_id: int,
+    keep_message_id: int | None = None,
+) -> None:
+    store = application.bot_data["store"]
+    progress_tasks = application.bot_data.setdefault("progress_tasks", {})
+    watches = await asyncio.to_thread(store.list_progress_watches)
+
+    for watch in watches:
+        watch_chat_id = int(watch.get("chat_id", 0) or 0)
+        watch_message_id = int(watch.get("message_id", 0) or 0)
+        if watch_chat_id != chat_id or watch_message_id == keep_message_id:
+            continue
+
+        existing_task = progress_tasks.get(watch_message_id)
+        if existing_task is not None and not existing_task.done():
+            existing_task.cancel()
+            try:
+                await existing_task
+            except asyncio.CancelledError:
+                pass
+
+        await asyncio.to_thread(store.delete_progress_watch, watch_message_id)
+
+        try:
+            await application.bot.delete_message(chat_id=chat_id, message_id=watch_message_id)
+        except BadRequest as exc:
+            if "message to delete not found" not in str(exc).lower():
+                logger.warning("Could not delete previous progress message %s: %s", watch_message_id, exc)
+        except TelegramError as exc:
+            logger.warning("Could not delete previous progress message %s: %s", watch_message_id, exc)
+
+
+def _format_progress_message(
+    *,
+    source_label: str,
+    queue_state: dict[str, Any],
+    updated_at: datetime | None = None,
+) -> str:
     total_count = int(queue_state.get("total_count", 0) or 0)
     uploaded_count = int(queue_state.get("uploaded_count", 0) or 0)
     status = str(queue_state.get("status", "ready"))
@@ -367,7 +437,7 @@ def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) 
     next_url = queue_state.get("next_url")
     last_error = _short_error(queue_state.get("last_error"))
     percent = 100 if total_count == 0 else int((uploaded_count / total_count) * 100)
-    updated_at = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    updated_at_text = _format_updated_at(updated_at)
 
     lines = [
         f"Source: {source_label}",
@@ -377,9 +447,27 @@ def _format_progress_message(*, source_label: str, queue_state: dict[str, Any]) 
         f"Current: {_line_preview(current_line, current_url)}",
         f"Next: {_line_preview(next_line, next_url)}",
         f"Last error: {last_error}",
-        f"Updated: {updated_at}",
+        f"Updated: {updated_at_text}",
     ]
     return "\n".join(lines)
+
+
+def _resolve_message_updated_at(updated_message: object) -> datetime | None:
+    edit_date = getattr(updated_message, "edit_date", None)
+    if isinstance(edit_date, datetime):
+        return edit_date.astimezone(timezone.utc)
+
+    sent_date = getattr(updated_message, "date", None)
+    if isinstance(sent_date, datetime):
+        return sent_date.astimezone(timezone.utc)
+
+    return datetime.now(timezone.utc)
+
+
+def _format_updated_at(updated_at: datetime | None) -> str:
+    if updated_at is None:
+        updated_at = datetime.now(timezone.utc)
+    return updated_at.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
 
 
 def _render_progress_bar(uploaded_count: int, total_count: int) -> str:
@@ -437,13 +525,22 @@ def log_background_task(task: asyncio.Task[Any]) -> None:
 async def on_startup(application: Application) -> None:
     application.bot_data.setdefault("progress_tasks", {})
     application.bot_data.setdefault("submission_tasks", {})
-    restore_progress_tasks(application)
+    await restore_progress_tasks(application)
     start_upload_task(application)
 
 
-def restore_progress_tasks(application: Application) -> None:
+async def restore_progress_tasks(application: Application) -> None:
     store = application.bot_data["store"]
+    latest_watches_by_chat: dict[int, dict[str, Any]] = {}
     for progress_watch in store.list_progress_watches():
+        latest_watches_by_chat[int(progress_watch["chat_id"])] = progress_watch
+
+    for progress_watch in latest_watches_by_chat.values():
+        await _replace_chat_progress_watch(
+            application,
+            chat_id=int(progress_watch["chat_id"]),
+            keep_message_id=int(progress_watch["message_id"]),
+        )
         start_progress_task(
             application,
             chat_id=int(progress_watch["chat_id"]),
