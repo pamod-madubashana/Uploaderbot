@@ -30,6 +30,7 @@ class UploadStore(Protocol):
         *,
         chat_id: int,
         message_id: int,
+        command_message_id: int | None,
         source_label: str,
         first_line_number: int,
         last_line_number: int,
@@ -180,6 +181,7 @@ class MongoUploadStore:
         *,
         chat_id: int,
         message_id: int,
+        command_message_id: int | None,
         source_label: str,
         first_line_number: int,
         last_line_number: int,
@@ -190,6 +192,7 @@ class MongoUploadStore:
                 "$set": {
                     "chat_id": chat_id,
                     "message_id": message_id,
+                    "command_message_id": command_message_id,
                     "source_label": source_label,
                     "first_line_number": first_line_number,
                     "last_line_number": last_line_number,
@@ -460,6 +463,7 @@ class SQLiteUploadStore:
             CREATE TABLE IF NOT EXISTS progress_watches (
                 message_id INTEGER PRIMARY KEY,
                 chat_id INTEGER NOT NULL,
+                command_message_id INTEGER,
                 source_label TEXT NOT NULL,
                 first_line_number INTEGER NOT NULL,
                 last_line_number INTEGER NOT NULL,
@@ -467,6 +471,14 @@ class SQLiteUploadStore:
             );
             """
         )
+        columns = {
+            str(row[1])
+            for row in self.connection.execute("PRAGMA table_info(progress_watches)").fetchall()
+        }
+        if "command_message_id" not in columns:
+            self.connection.execute(
+                "ALTER TABLE progress_watches ADD COLUMN command_message_id INTEGER"
+            )
         self.connection.commit()
 
     def _fetchone(self, query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
@@ -566,6 +578,7 @@ class SQLiteUploadStore:
         *,
         chat_id: int,
         message_id: int,
+        command_message_id: int | None,
         source_label: str,
         first_line_number: int,
         last_line_number: int,
@@ -573,10 +586,11 @@ class SQLiteUploadStore:
         self.connection.execute(
             """
             INSERT INTO progress_watches (
-                message_id, chat_id, source_label, first_line_number, last_line_number, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                message_id, chat_id, command_message_id, source_label, first_line_number, last_line_number, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_id) DO UPDATE SET
                 chat_id = excluded.chat_id,
+                command_message_id = excluded.command_message_id,
                 source_label = excluded.source_label,
                 first_line_number = excluded.first_line_number,
                 last_line_number = excluded.last_line_number,
@@ -585,6 +599,7 @@ class SQLiteUploadStore:
             (
                 message_id,
                 chat_id,
+                command_message_id,
                 source_label,
                 first_line_number,
                 last_line_number,

@@ -121,6 +121,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.application,
         chat_id=progress_message.chat_id,
         message_id=progress_message.message_id,
+        command_message_id=message.message_id,
         source_label="status",
         first_line_number=0,
         last_line_number=0,
@@ -306,6 +307,7 @@ def start_progress_task(
     *,
     chat_id: int,
     message_id: int,
+    command_message_id: int | None = None,
     source_label: str,
     first_line_number: int,
     last_line_number: int,
@@ -318,6 +320,7 @@ def start_progress_task(
     store.save_progress_watch(
         chat_id=chat_id,
         message_id=message_id,
+        command_message_id=command_message_id,
         source_label=source_label,
         first_line_number=first_line_number,
         last_line_number=last_line_number,
@@ -408,6 +411,7 @@ async def _replace_chat_progress_watch(
     for watch in watches:
         watch_chat_id = int(watch.get("chat_id", 0) or 0)
         watch_message_id = int(watch.get("message_id", 0) or 0)
+        watch_command_message_id = watch.get("command_message_id")
         if watch_chat_id != chat_id or watch_message_id == keep_message_id:
             continue
 
@@ -428,6 +432,23 @@ async def _replace_chat_progress_watch(
                 logger.warning("Could not delete previous progress message %s: %s", watch_message_id, exc)
         except TelegramError as exc:
             logger.warning("Could not delete previous progress message %s: %s", watch_message_id, exc)
+
+        if watch_command_message_id is not None:
+            try:
+                await application.bot.delete_message(chat_id=chat_id, message_id=int(watch_command_message_id))
+            except BadRequest as exc:
+                if "message to delete not found" not in str(exc).lower():
+                    logger.warning(
+                        "Could not delete previous status command message %s: %s",
+                        watch_command_message_id,
+                        exc,
+                    )
+            except TelegramError as exc:
+                logger.warning(
+                    "Could not delete previous status command message %s: %s",
+                    watch_command_message_id,
+                    exc,
+                )
 
 
 def _format_progress_message(
@@ -571,6 +592,11 @@ async def restore_progress_tasks(application: Application) -> None:
             application,
             chat_id=int(progress_watch["chat_id"]),
             message_id=int(progress_watch["message_id"]),
+            command_message_id=(
+                int(progress_watch["command_message_id"])
+                if progress_watch.get("command_message_id") is not None
+                else None
+            ),
             source_label=str(progress_watch["source_label"]),
             first_line_number=int(progress_watch["first_line_number"]),
             last_line_number=int(progress_watch["last_line_number"]),

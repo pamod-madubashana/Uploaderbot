@@ -177,6 +177,7 @@ class StoreTests(unittest.TestCase):
                 store.save_progress_watch(
                     chat_id=123,
                     message_id=456,
+                    command_message_id=321,
                     source_label="message",
                     first_line_number=10,
                     last_line_number=20,
@@ -187,6 +188,7 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(len(watches), 1)
                 self.assertEqual(watches[0]["chat_id"], 123)
                 self.assertEqual(watches[0]["message_id"], 456)
+                self.assertEqual(watches[0]["command_message_id"], 321)
                 self.assertEqual(watches[0]["first_line_number"], 10)
                 self.assertEqual(watches[0]["last_line_number"], 20)
 

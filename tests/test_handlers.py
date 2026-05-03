@@ -10,10 +10,10 @@ from uploaderbot.handlers import BOT_COMMANDS, _format_progress_message, _replac
 
 
 class FakeStore:
-    def __init__(self, watches: list[dict[str, int]] | None = None) -> None:
+    def __init__(self, watches: list[dict[str, int | None]] | None = None) -> None:
         self._watches = list(watches or [])
 
-    def list_progress_watches(self) -> list[dict[str, int]]:
+    def list_progress_watches(self) -> list[dict[str, int | None]]:
         return list(self._watches)
 
     def delete_progress_watch(self, message_id: int) -> None:
@@ -82,6 +82,30 @@ class ReplaceProgressWatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(store.list_progress_watches(), [{"chat_id": 20, "message_id": 202}])
         self.assertEqual(bot.deleted_messages, [(10, 101)])
+
+    async def test_replace_chat_progress_watch_removes_previous_status_command_message(self) -> None:
+        store = FakeStore(
+            [
+                {"chat_id": 10, "message_id": 101, "command_message_id": 99},
+                {"chat_id": 10, "message_id": 102, "command_message_id": 100},
+            ]
+        )
+        bot = FakeBot()
+        application = SimpleNamespace(
+            bot=bot,
+            bot_data={
+                "store": store,
+                "progress_tasks": {},
+            },
+        )
+
+        await _replace_chat_progress_watch(cast(Any, application), chat_id=10, keep_message_id=102)
+
+        self.assertEqual(
+            store.list_progress_watches(),
+            [{"chat_id": 10, "message_id": 102, "command_message_id": 100}],
+        )
+        self.assertEqual(bot.deleted_messages, [(10, 101), (10, 99)])
 
     async def test_replace_chat_progress_watch_keeps_current_message(self) -> None:
         store = FakeStore(
